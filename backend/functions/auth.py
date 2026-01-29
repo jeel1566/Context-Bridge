@@ -1,8 +1,9 @@
 """
-Auth Function - Google OAuth 2.0 Authentication
+Auth Function - Google OAuth 2.0 Authentication with JWT
 
 Endpoints:
-- POST /api/auth/google - Verify Google ID token
+- POST /api/auth/google - Verify Google ID token and issue JWT
+- POST /api/auth/refresh - Refresh access token
 - GET /api/auth/user - Get current user info
 """
 
@@ -11,31 +12,41 @@ import json
 import logging
 import os
 from typing import Optional
+from datetime import datetime
+
+from services import get_cosmos_service, get_jwt_service
+from middleware import (
+    require_json_body,
+    require_fields,
+    handle_exception,
+    require_auth,
+    ValidationError,
+    AuthenticationError,
+)
+
+logger = logging.getLogger(__name__)
 
 try:
     from google.oauth2 import id_token
     from google.auth.transport import requests as google_requests
 except ImportError:
-    # Fallback for local dev without google-auth
     id_token = None
     google_requests = None
-
-
-# In-memory user store (replace with Cosmos DB)
-USER_STORE = {}
 
 
 async def auth_handler(req: func.HttpRequest) -> func.HttpResponse:
     """Handle authentication requests."""
     
-    path = req.url.split('/api/auth/')[-1]
+    path = req.url.split('/api/auth/')[-1].split('?')[0]
     method = req.method
     
     try:
         if path == 'google' and method == 'POST':
             return await verify_google_token(req)
+        elif path == 'refresh' and method == 'POST':
+            return await refresh_token(req)
         elif path == 'user' and method == 'GET':
-            return get_current_user(req)
+            return await get_current_user(req)
         else:
             return func.HttpResponse(
                 json.dumps({"status": "error", "message": "Invalid auth endpoint"}),
@@ -43,45 +54,23 @@ async def auth_handler(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=404
             )
     except Exception as e:
-        logging.error(f"Auth error: {e}")
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": str(e)}),
-            mimetype="application/json",
-            status_code=500
-        )
+        return handle_exception(e)
 
 
 async def verify_google_token(req: func.HttpRequest) -> func.HttpResponse:
-    """POST /api/auth/google - Verify Google ID token and create/login user."""
+    """POST /api/auth/google - Verify Google ID token and issue JWT."""
     
-    try:
-        body = req.get_json()
-    except ValueError:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Invalid JSON"}),
-            mimetype="application/json",
-            status_code=400
-        )
+    body = require_json_body(req)
     
     token = body.get('idToken')
-    
     if not token:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Missing idToken"}),
-            mimetype="application/json",
-            status_code=400
-        )
+        raise ValidationError("Missing idToken field")
     
-    # Get Google Client ID from environment
     client_id = os.environ.get('GOOGLE_CLIENT_ID')
     
     if not client_id:
-        logging.error("GOOGLE_CLIENT_ID not configured")
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Auth not configured"}),
-            mimetype="application/json",
-            status_code=500
-        )
+        logger.error("GOOGLE_CLIENT_ID not configured")
+        raise AuthenticationError("Authentication not configured")
     
     try:
         # Verify the token with Google
@@ -92,7 +81,8 @@ async def verify_google_token(req: func.HttpRequest) -> func.HttpResponse:
                 client_id
             )
         else:
-            # Mock for local development
+            # Mock for local development without google-auth
+            logger.warning("Google auth not available - using mock for development")
             idinfo = {
                 "sub": "mock-user-id",
                 "email": "dev@example.com",
@@ -105,20 +95,50 @@ async def verify_google_token(req: func.HttpRequest) -> func.HttpResponse:
         name = idinfo.get('name', '')
         picture = idinfo.get('picture', '')
         
-        # Create or update user
-        user = USER_STORE.get(user_id, {})
-        user.update({
-            "id": user_id,
-            "email": email,
-            "name": name,
-            "picture": picture,
-            "lastLogin": req.headers.get('X-Timestamp', '')
-        })
-        USER_STORE[user_id] = user
+        # Get or create user in storage
+        cosmos = get_cosmos_service()
+        existing_user = await cosmos.users.read(user_id)
         
-        # Generate session token (simplified - use JWT in production)
-        import secrets
-        session_token = secrets.token_urlsafe(32)
+        now = datetime.utcnow().isoformat() + 'Z'
+        
+        if existing_user:
+            # Update existing user
+            user = existing_user
+            user['lastLogin'] = now
+            user['name'] = name  # Update in case it changed
+            user['picture'] = picture
+            await cosmos.users.update(user_id, user)
+        else:
+            # Create new user
+            user = {
+                "id": user_id,
+                "email": email,
+                "name": name,
+                "picture": picture,
+                "createdAt": now,
+                "lastLogin": now
+            }
+            await cosmos.users.create(user)
+        
+        # Generate JWT tokens
+        jwt_service = get_jwt_service()
+        
+        if jwt_service.is_configured:
+            tokens = jwt_service.create_tokens(
+                user_id=user_id,
+                email=email,
+                extra_claims={"name": name}
+            )
+        else:
+            # Fallback for development without JWT configured
+            import secrets
+            logger.warning("JWT not configured - using insecure token")
+            tokens = {
+                "access_token": secrets.token_urlsafe(32),
+                "refresh_token": secrets.token_urlsafe(32),
+                "token_type": "bearer",
+                "expires_in": 900
+            }
         
         return func.HttpResponse(
             json.dumps({
@@ -130,7 +150,7 @@ async def verify_google_token(req: func.HttpRequest) -> func.HttpResponse:
                         "name": name,
                         "picture": picture
                     },
-                    "token": session_token
+                    **tokens
                 }
             }),
             mimetype="application/json",
@@ -138,39 +158,69 @@ async def verify_google_token(req: func.HttpRequest) -> func.HttpResponse:
         )
         
     except ValueError as e:
-        logging.error(f"Invalid token: {e}")
+        logger.error(f"Invalid token: {e}")
+        raise AuthenticationError("Invalid Google token")
+
+
+async def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
+    """POST /api/auth/refresh - Refresh access token using refresh token."""
+    
+    body = require_json_body(req)
+    
+    refresh_token = body.get('refreshToken') or body.get('refresh_token')
+    if not refresh_token:
+        raise ValidationError("Missing refreshToken field")
+    
+    jwt_service = get_jwt_service()
+    
+    if not jwt_service.is_configured:
+        raise AuthenticationError("Token refresh not available")
+    
+    try:
+        tokens = jwt_service.refresh_access_token(refresh_token)
+        
         return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Invalid token"}),
+            json.dumps({
+                "status": "success",
+                "data": tokens
+            }),
             mimetype="application/json",
-            status_code=401
+            status_code=200
         )
+        
+    except Exception as e:
+        logger.warning(f"Token refresh failed: {e}")
+        raise AuthenticationError("Invalid or expired refresh token")
 
 
-def get_current_user(req: func.HttpRequest) -> func.HttpResponse:
+async def get_current_user(req: func.HttpRequest) -> func.HttpResponse:
     """GET /api/auth/user - Get current authenticated user."""
     
-    user_id = req.headers.get('X-User-Id')
+    user = require_auth(req)
+    user_id = user['id']
     
-    if not user_id:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Not authenticated"}),
-            mimetype="application/json",
-            status_code=401
-        )
+    # Get full user data from storage
+    cosmos = get_cosmos_service()
+    stored_user = await cosmos.users.read(user_id)
     
-    user = USER_STORE.get(user_id)
+    if not stored_user:
+        # User exists in token but not in database (edge case)
+        stored_user = {
+            "id": user_id,
+            "email": user.get('email'),
+        }
     
-    if not user:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "User not found"}),
-            mimetype="application/json",
-            status_code=404
-        )
+    # Remove sensitive fields
+    stored_user.pop('_rid', None)
+    stored_user.pop('_self', None)
+    stored_user.pop('_etag', None)
+    stored_user.pop('_attachments', None)
+    stored_user.pop('_ts', None)
     
     return func.HttpResponse(
         json.dumps({
             "status": "success",
-            "data": user
+            "data": stored_user
         }),
         mimetype="application/json",
         status_code=200

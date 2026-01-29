@@ -7,6 +7,8 @@ Endpoints:
 - GET /api/memories/:id - Get single memory
 - PUT /api/memories/:id - Update memory
 - DELETE /api/memories/:id - Delete memory
+
+Uses Cosmos DB for persistent storage and AES-256-GCM encryption.
 """
 
 import azure.functions as func
@@ -16,9 +18,18 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from services import get_cosmos_service, get_encryption_service
+from middleware import (
+    require_auth,
+    require_json_body,
+    require_fields,
+    handle_exception,
+    NotFoundError,
+    AuthorizationError,
+    ValidationError,
+)
 
-# In-memory storage for development (replace with Cosmos DB in production)
-MEMORY_STORE = {}
+logger = logging.getLogger(__name__)
 
 
 async def memories_handler(req: func.HttpRequest) -> func.HttpResponse:
@@ -27,14 +38,15 @@ async def memories_handler(req: func.HttpRequest) -> func.HttpResponse:
     method = req.method
     memory_id = req.route_params.get('id')
     
-    # Get user ID from auth header (simplified for now)
-    user_id = req.headers.get('X-User-Id', 'anonymous')
-    
     try:
+        # Authenticate request
+        user = require_auth(req)
+        user_id = user['id']
+        
         if method == 'GET':
             if memory_id:
-                return get_memory(user_id, memory_id)
-            return list_memories(user_id)
+                return await get_memory(user_id, memory_id)
+            return await list_memories(user_id)
             
         elif method == 'POST':
             return await create_memory(user_id, req)
@@ -43,7 +55,7 @@ async def memories_handler(req: func.HttpRequest) -> func.HttpResponse:
             return await update_memory(user_id, memory_id, req)
             
         elif method == 'DELETE':
-            return delete_memory(user_id, memory_id)
+            return await delete_memory(user_id, memory_id)
             
         else:
             return func.HttpResponse(
@@ -53,54 +65,64 @@ async def memories_handler(req: func.HttpRequest) -> func.HttpResponse:
             )
             
     except Exception as e:
-        logging.error(f"Memories error: {e}")
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": str(e)}),
-            mimetype="application/json",
-            status_code=500
-        )
+        return handle_exception(e)
 
 
-def list_memories(user_id: str) -> func.HttpResponse:
+async def list_memories(user_id: str) -> func.HttpResponse:
     """GET /api/memories - List all memories for user."""
     
-    user_memories = [
-        m for m in MEMORY_STORE.values()
-        if m.get('userId') == user_id
-    ]
+    cosmos = get_cosmos_service()
+    encryption = get_encryption_service()
     
-    # Sort by updated date, newest first
-    user_memories.sort(key=lambda x: x.get('updatedAt', ''), reverse=True)
+    # Query memories by user ID
+    query = "SELECT * FROM c WHERE c.userId = @userId ORDER BY c.updatedAt DESC"
+    parameters = [{"name": "@userId", "value": user_id}]
+    
+    memories = await cosmos.memories.query(query, parameters)
+    
+    # Decrypt content for response
+    for memory in memories:
+        if memory.get('encryptedContent') and encryption.is_configured:
+            try:
+                memory['content'] = encryption.decrypt(memory['encryptedContent'])
+                del memory['encryptedContent']  # Don't expose encrypted data
+            except Exception:
+                logger.warning(f"Failed to decrypt memory {memory.get('id')}")
+                memory['content'] = "[Decryption failed]"
     
     return func.HttpResponse(
         json.dumps({
             "status": "success",
-            "data": user_memories,
-            "count": len(user_memories)
+            "data": memories,
+            "count": len(memories)
         }),
         mimetype="application/json",
         status_code=200
     )
 
 
-def get_memory(user_id: str, memory_id: str) -> func.HttpResponse:
+async def get_memory(user_id: str, memory_id: str) -> func.HttpResponse:
     """GET /api/memories/:id - Get single memory."""
     
-    memory = MEMORY_STORE.get(memory_id)
+    cosmos = get_cosmos_service()
+    encryption = get_encryption_service()
+    
+    memory = await cosmos.memories.read(memory_id, user_id)
     
     if not memory:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Memory not found"}),
-            mimetype="application/json",
-            status_code=404
-        )
+        raise NotFoundError("Memory not found")
     
     if memory.get('userId') != user_id:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Unauthorized"}),
-            mimetype="application/json",
-            status_code=403
-        )
+        raise AuthorizationError("Access denied")
+    
+    # Decrypt content
+    if memory.get('encryptedContent') and encryption.is_configured:
+        try:
+            memory['content'] = encryption.decrypt(memory['encryptedContent'])
+            del memory['encryptedContent']
+        except Exception:
+            logger.warning(f"Failed to decrypt memory {memory_id}")
+            memory['content'] = "[Decryption failed]"
     
     return func.HttpResponse(
         json.dumps({"status": "success", "data": memory}),
@@ -112,31 +134,27 @@ def get_memory(user_id: str, memory_id: str) -> func.HttpResponse:
 async def create_memory(user_id: str, req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/memories - Create new memory block."""
     
-    try:
-        body = req.get_json()
-    except ValueError:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Invalid JSON"}),
-            mimetype="application/json",
-            status_code=400
-        )
+    body = require_json_body(req)
+    require_fields(body, ['title', 'content'])
     
-    # Validate required fields
-    if not body.get('title') or not body.get('content'):
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Missing title or content"}),
-            mimetype="application/json",
-            status_code=400
-        )
+    cosmos = get_cosmos_service()
+    encryption = get_encryption_service()
     
     now = datetime.utcnow().isoformat() + 'Z'
     memory_id = str(uuid.uuid4())
+    
+    # Encrypt content before storage
+    content = body.get('content')
+    encrypted_content = None
+    if encryption.is_configured:
+        encrypted_content = encryption.encrypt(content)
     
     memory = {
         "id": memory_id,
         "userId": user_id,
         "title": body.get('title'),
-        "content": body.get('content'),
+        "content": content if not encryption.is_configured else None,  # Only store if not encrypted
+        "encryptedContent": encrypted_content,
         "tags": body.get('tags', []),
         "personality": body.get('personality', 'senior-dev'),
         "privacyLevel": body.get('privacyLevel', 'local'),
@@ -145,10 +163,19 @@ async def create_memory(user_id: str, req: func.HttpRequest) -> func.HttpRespons
         "updatedAt": now
     }
     
-    MEMORY_STORE[memory_id] = memory
+    # Remove None values
+    memory = {k: v for k, v in memory.items() if v is not None}
+    
+    await cosmos.memories.create(memory)
+    
+    # Return memory with decrypted content
+    response_memory = memory.copy()
+    response_memory['content'] = content
+    if 'encryptedContent' in response_memory:
+        del response_memory['encryptedContent']
     
     return func.HttpResponse(
-        json.dumps({"status": "success", "data": memory}),
+        json.dumps({"status": "success", "data": response_memory}),
         mimetype="application/json",
         status_code=201
     )
@@ -157,66 +184,64 @@ async def create_memory(user_id: str, req: func.HttpRequest) -> func.HttpRespons
 async def update_memory(user_id: str, memory_id: str, req: func.HttpRequest) -> func.HttpResponse:
     """PUT /api/memories/:id - Update memory block."""
     
-    memory = MEMORY_STORE.get(memory_id)
+    cosmos = get_cosmos_service()
+    encryption = get_encryption_service()
+    
+    memory = await cosmos.memories.read(memory_id, user_id)
     
     if not memory:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Memory not found"}),
-            mimetype="application/json",
-            status_code=404
-        )
+        raise NotFoundError("Memory not found")
     
     if memory.get('userId') != user_id:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Unauthorized"}),
-            mimetype="application/json",
-            status_code=403
-        )
+        raise AuthorizationError("Access denied")
     
-    try:
-        body = req.get_json()
-    except ValueError:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Invalid JSON"}),
-            mimetype="application/json",
-            status_code=400
-        )
+    body = require_json_body(req)
     
     # Update allowed fields
-    for field in ['title', 'content', 'tags', 'personality', 'privacyLevel', 'isActive']:
+    for field in ['title', 'tags', 'personality', 'privacyLevel', 'isActive']:
         if field in body:
             memory[field] = body[field]
     
+    # Handle content update with encryption
+    if 'content' in body:
+        content = body['content']
+        if encryption.is_configured:
+            memory['encryptedContent'] = encryption.encrypt(content)
+            memory.pop('content', None)  # Remove unencrypted content
+        else:
+            memory['content'] = content
+    
     memory['updatedAt'] = datetime.utcnow().isoformat() + 'Z'
-    MEMORY_STORE[memory_id] = memory
+    
+    await cosmos.memories.update(memory_id, memory, user_id)
+    
+    # Return memory with decrypted content
+    response_memory = memory.copy()
+    if 'encryptedContent' in response_memory and encryption.is_configured:
+        response_memory['content'] = body.get('content') or encryption.decrypt(response_memory['encryptedContent'])
+        del response_memory['encryptedContent']
     
     return func.HttpResponse(
-        json.dumps({"status": "success", "data": memory}),
+        json.dumps({"status": "success", "data": response_memory}),
         mimetype="application/json",
         status_code=200
     )
 
 
-def delete_memory(user_id: str, memory_id: str) -> func.HttpResponse:
+async def delete_memory(user_id: str, memory_id: str) -> func.HttpResponse:
     """DELETE /api/memories/:id - Delete memory block."""
     
-    memory = MEMORY_STORE.get(memory_id)
+    cosmos = get_cosmos_service()
+    
+    memory = await cosmos.memories.read(memory_id, user_id)
     
     if not memory:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Memory not found"}),
-            mimetype="application/json",
-            status_code=404
-        )
+        raise NotFoundError("Memory not found")
     
     if memory.get('userId') != user_id:
-        return func.HttpResponse(
-            json.dumps({"status": "error", "message": "Unauthorized"}),
-            mimetype="application/json",
-            status_code=403
-        )
+        raise AuthorizationError("Access denied")
     
-    del MEMORY_STORE[memory_id]
+    await cosmos.memories.delete(memory_id, user_id)
     
     return func.HttpResponse(
         json.dumps({"status": "success", "message": "Memory deleted"}),
