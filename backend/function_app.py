@@ -62,9 +62,9 @@ def share(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/share - Generate share link"""
     return share_handler(req)
 
-@app.route(route="shared/{share_id}", methods=["GET"])
+@app.route(route="shared/{share_code}", methods=["GET"])
 def shared(req: func.HttpRequest) -> func.HttpResponse:
-    """GET /api/shared/:shareId - Access shared bank"""
+    """GET /api/shared/:shareCode - Access shared bank"""
     return share_handler(req)
 
 # ============================================
@@ -79,3 +79,23 @@ def auth_google(req: func.HttpRequest) -> func.HttpResponse:
 def auth_user(req: func.HttpRequest) -> func.HttpResponse:
     """GET /api/auth/user - Get current user info"""
     return auth_handler(req)
+
+@app.route(route="auth/refresh", methods=["POST"])
+def auth_refresh(req: func.HttpRequest) -> func.HttpResponse:
+    """POST /api/auth/refresh - Refresh access token"""
+    return auth_handler(req)
+
+# ============================================
+# Sync
+# ============================================
+from functions.sync import sync_handler
+
+@app.route(route="sync", methods=["POST"])
+def sync(req: func.HttpRequest) -> func.HttpResponse:
+    """POST /api/sync - Sync memories across devices"""
+    return sync_handler(req)
+
+@app.route(route="sync/status", methods=["GET"])
+def sync_status(req: func.HttpRequest) -> func.HttpResponse:
+    """GET /api/sync/status - Get sync status"""
+    return sync_handler(req)

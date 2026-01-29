@@ -1,0 +1,19 @@
+{
+    "name": "context-bridge-extension",
+    "version": "1.0.0",
+    "description": "Context Bridge - Chrome Extension for memory bank management",
+    "private": true,
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "watch": "vite build --watch"
+    },
+    "dependencies": {
+        "@anthropic-ai/sdk": "^0.30.0"
+    },
+    "devDependencies": {
+        "@crxjs/vite-plugin": "^2.0.0-beta.28",
+        "vite": "^5.0.0"
+    }
+}

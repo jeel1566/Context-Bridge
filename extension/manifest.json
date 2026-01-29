@@ -1,0 +1,62 @@
+{
+    "manifest_version": 3,
+    "name": "Context Bridge",
+    "version": "1.0.0",
+    "description": "Capture, store, and share context across AI conversations",
+    "permissions": [
+        "storage",
+        "sidePanel",
+        "activeTab",
+        "identity"
+    ],
+    "host_permissions": [
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://*.anthropic.com/*"
+    ],
+    "background": {
+        "service_worker": "src/background/index.js",
+        "type": "module"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://chat.openai.com/*",
+                "https://claude.ai/*",
+                "https://gemini.google.com/*"
+            ],
+            "js": [
+                "src/content-scripts/core/observer.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "side_panel": {
+        "default_path": "src/sidepanel/index.html"
+    },
+    "action": {
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "32": "icons/icon32.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        },
+        "default_title": "Context Bridge"
+    },
+    "icons": {
+        "16": "icons/icon16.png",
+        "32": "icons/icon32.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
+    "oauth2": {
+        "client_id": "799569526859-bc8smjo20jv7dih1vui7cd8k5v5i4l52.apps.googleusercontent.com",
+        "scopes": [
+            "openid",
+            "email",
+            "profile"
+        ]
+    },
+    "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApNYvh5fS6BYnBlbAUtcOdvt1hswqAFj9sML9ntlmmVDKCkY9bDLCxZ/2uswj1qnWQUAFlgitX5cYr2f3aTJhIAFZatzzd5RBYAnzi5/4J5E2PLCyAziKFYErvfCyR8Ov8zA6jiZ1a08dJADW/wzEktP7QI6whUKwV9X0gnDxWYea7pHl942REHEXdkn+HPwgl9UyK/F4SipnroOcAGVK4/lK6RL1HEiXSQzMsw0+DoW8dpkRdiFuTTJ0p80ku0k3a2+2L2rNs40xIj3J3+MxJcyRlXxxveUFhWFeuuKz36kaEHa+ipRy9aLTK6g8CiFjim4uLCTBnzTrHhyftekTFQIDAQAB"
+}

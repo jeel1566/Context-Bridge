@@ -34,7 +34,7 @@ context_bridge_pipeline = SequentialAgent(
     ],
 )
 
-# The main orchestrator agent that can delegate to specialized agents
+# The main orchestrator agent that coordinates with the pipeline
 # This is an LlmAgent so it can intelligently route requests
 orchestrator = LlmAgent(
     model='gemini-3-flash-preview',
@@ -68,10 +68,7 @@ When users ask about context, respond helpfully and guide them to use:
 Always be helpful, secure, and respect user privacy.
 Respond in a friendly but professional manner.
 """,
-    sub_agents=[
-        scope_validator,
-        context_processor,
-    ],
+    # Note: sub_agents are in context_bridge_pipeline, not duplicated here
     output_key="orchestrator_response",
 )
 
