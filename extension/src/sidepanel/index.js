@@ -34,7 +34,33 @@ const elements = {
     syncBtn: $('#sync-btn'),
     syncIndicator: $('#sync-indicator'),
     syncText: $('#sync-text'),
+    themeToggle: $('#theme-toggle'),
 };
+
+// ============================================
+// Theme Management
+// ============================================
+
+function initTheme() {
+    const savedTheme = localStorage.getItem('context-bridge-theme');
+    if (savedTheme) {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+    } else {
+        // Default to dark
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+}
+
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('context-bridge-theme', newTheme);
+
+    // Also save to chrome.storage for sync across windows
+    chrome.storage.local.set({ theme: newTheme });
+}
 
 // ============================================
 // API Communication
@@ -209,20 +235,68 @@ async function captureContext() {
             return;
         }
 
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_CONTEXT' });
+        // Check if this is a supported URL
+        const supportedPatterns = [
+            /chat\.openai\.com/,
+            /chatgpt\.com/,
+            /claude\.ai/,
+            /gemini\.google\.com/
+        ];
 
-        if (response && response.messages) {
+        const isSupported = supportedPatterns.some(p => p.test(tab.url));
+        if (!isSupported) {
+            alert('This page is not a supported AI chat. Supported: ChatGPT, Claude, Gemini');
+            return;
+        }
+
+        let response;
+        try {
+            // Try to send message to content script
+            response = await chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_CONTEXT' });
+        } catch (error) {
+            // Content script not loaded - inject it first
+            console.log('Content script not loaded, injecting...');
+
+            try {
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: [
+                        'src/content-scripts/platforms/base.js',
+                        'src/content-scripts/platforms/chatgpt.js',
+                        'src/content-scripts/platforms/claude.js',
+                        'src/content-scripts/platforms/gemini.js',
+                        'src/content-scripts/core/auto-discovery.js',
+                        'src/content-scripts/processors/content-extractor.js',
+                        'src/content-scripts/core/parser.js',
+                        'src/content-scripts/core/button-injector.js',
+                        'src/content-scripts/core/observer.js'
+                    ]
+                });
+
+                // Wait for scripts to initialize
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                // Try again
+                response = await chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_CONTEXT' });
+            } catch (injectError) {
+                console.error('Script injection failed:', injectError);
+                alert('Failed to initialize capture. Please refresh the page and try again.');
+                return;
+            }
+        }
+
+        if (response && response.messages && response.messages.length > 0) {
             showEditor({
                 title: `Conversation from ${new URL(tab.url).hostname}`,
                 content: response.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
                 tags: [response.platform || 'chat'],
             });
         } else {
-            alert('No context found on this page');
+            alert('No conversation found on this page. Make sure there are messages in the chat.');
         }
     } catch (error) {
         console.error('Capture failed:', error);
-        alert('Cannot capture from this page. Make sure you\'re on a supported AI chat.');
+        alert('Capture failed. Please refresh the ChatGPT/Claude/Gemini page and try again.');
     }
 }
 
@@ -241,7 +315,7 @@ async function syncNow() {
         await sendMessage('SYNC_MEMORIES', {
             deviceId,
             lastSyncAt: lastSync,
-            memories: [], // Local changes would go here
+            memories: [],
         });
 
         await loadMemories();
@@ -299,12 +373,17 @@ elements.addMemoryBtn?.addEventListener('click', () => showEditor());
 elements.cancelBtn?.addEventListener('click', hideEditor);
 elements.memoryForm?.addEventListener('submit', saveMemory);
 elements.syncBtn?.addEventListener('click', syncNow);
+elements.themeToggle?.addEventListener('click', toggleTheme);
 
 // ============================================
 // Initialization
 // ============================================
 
 async function init() {
+    // Initialize theme
+    initTheme();
+
+    // Check auth and load data
     const isAuthenticated = await checkAuthStatus();
     if (isAuthenticated) {
         await loadMemories();

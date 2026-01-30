@@ -2,77 +2,68 @@
  * Context Bridge - Content Script Observer
  * 
  * Observes AI chat interfaces and captures context.
- * Supports: ChatGPT, Claude, Gemini
+ * Supports: ChatGPT, Claude, Gemini + auto-discovery for others
  */
 
-// Platform detection
-const platforms = {
-    chatgpt: {
-        match: /chat\.openai\.com/,
-        messageSelector: '[data-message-author-role]',
-        inputSelector: '#prompt-textarea',
-    },
-    claude: {
-        match: /claude\.ai/,
-        messageSelector: '[data-test-render-count]',
-        inputSelector: '[contenteditable="true"]',
-    },
-    gemini: {
-        match: /gemini\.google\.com/,
-        messageSelector: 'message-content',
-        inputSelector: 'rich-textarea',
-    },
-};
-
-let currentPlatform = null;
+// Global parser instance
+let parser = null;
+let buttonInjector = null;
 let observer = null;
 
 // ============================================
-// Platform Detection
+// Initialization
 // ============================================
 
-function detectPlatform() {
-    const url = window.location.href;
+function initParser() {
+    console.log('Context Bridge: Initializing parser...');
 
-    for (const [name, config] of Object.entries(platforms)) {
-        if (config.match.test(url)) {
-            return { name, config };
-        }
+    // Create and initialize parser
+    parser = new ContextBridgeParser();
+    parser.init();
+
+    // Initialize button injector
+    buttonInjector = new ButtonInjector();
+    buttonInjector.init(parser);
+
+    const platform = parser.getDetectedPlatform();
+    if (platform) {
+        console.log(`Context Bridge: Detected platform - ${platform}`);
+    } else {
+        console.log('Context Bridge: No platform detected, using auto-discovery mode');
     }
 
-    return null;
+    console.log('Context Bridge: Parser initialized successfully');
 }
 
 // ============================================
 // Context Capture
 // ============================================
 
-function captureContext() {
-    if (!currentPlatform) return null;
+async function captureContext() {
+    if (!parser) {
+        initParser();
+    }
 
-    const { config } = currentPlatform;
-    const messages = document.querySelectorAll(config.messageSelector);
+    try {
+        const result = await parser.parse();
 
-    if (!messages.length) return null;
-
-    const contextData = {
-        platform: currentPlatform.name,
-        url: window.location.href,
-        timestamp: new Date().toISOString(),
-        messages: [],
-    };
-
-    messages.forEach((msg, index) => {
-        const role = msg.dataset?.messageAuthorRole ||
-            (index % 2 === 0 ? 'user' : 'assistant');
-        const content = msg.textContent?.trim() || '';
-
-        if (content) {
-            contextData.messages.push({ role, content });
+        if (!result || !result.success) {
+            console.log('Context Bridge: No content captured');
+            return null;
         }
-    });
 
-    return contextData;
+        return {
+            platform: result.platform,
+            url: window.location.href,
+            timestamp: new Date().toISOString(),
+            messages: result.messages,
+            confidence: result.confidence,
+            method: result.method
+        };
+    } catch (error) {
+        console.error('Context Bridge: Capture error', error);
+        return null;
+    }
 }
 
 function captureSelectedText() {
@@ -80,11 +71,11 @@ function captureSelectedText() {
     if (!selection || selection.isCollapsed) return null;
 
     return {
-        platform: currentPlatform?.name || 'unknown',
+        platform: parser?.getDetectedPlatform() || 'unknown',
         url: window.location.href,
         timestamp: new Date().toISOString(),
         selectedText: selection.toString().trim(),
-        type: 'selection',
+        type: 'selection'
     };
 }
 
@@ -93,48 +84,63 @@ function captureSelectedText() {
 // ============================================
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    handleMessage(message)
+        .then(sendResponse)
+        .catch(error => sendResponse({ error: error.message }));
+    return true; // Keep channel open for async
+});
+
+async function handleMessage(message) {
     switch (message.type) {
         case 'CAPTURE_CONTEXT':
-            sendResponse(captureContext());
-            break;
+            return captureContext();
 
         case 'CAPTURE_SELECTION':
-            sendResponse(captureSelectedText());
-            break;
+            return captureSelectedText();
 
         case 'GET_PLATFORM':
-            sendResponse(currentPlatform ? currentPlatform.name : null);
-            break;
+            return parser?.getDetectedPlatform() || null;
+
+        case 'REFRESH_BUTTON':
+            if (buttonInjector) {
+                buttonInjector.destroy();
+                buttonInjector.init(parser);
+            }
+            return { success: true };
 
         default:
-            sendResponse({ error: 'Unknown message type' });
+            return { error: 'Unknown message type' };
     }
-    return true;
-});
+}
 
 // ============================================
 // DOM Observer
 // ============================================
 
 function setupObserver() {
-    if (!currentPlatform) return;
-
-    const { config } = currentPlatform;
-
-    // Observe for new messages
     observer = new MutationObserver((mutations) => {
+        let hasNewContent = false;
+
         for (const mutation of mutations) {
             if (mutation.addedNodes.length > 0) {
-                // New content added - might be a new message
-                // Debounce and notify background if needed
-                debouncedNotify();
+                hasNewContent = true;
+                break;
+            }
+        }
+
+        if (hasNewContent) {
+            debouncedNotify();
+
+            // Clear parser cache on DOM changes
+            if (parser) {
+                parser.clearCache();
             }
         }
     });
 
     observer.observe(document.body, {
         childList: true,
-        subtree: true,
+        subtree: true
     });
 }
 
@@ -142,10 +148,9 @@ let notifyTimeout = null;
 function debouncedNotify() {
     if (notifyTimeout) clearTimeout(notifyTimeout);
     notifyTimeout = setTimeout(() => {
-        // Notify background about potential new context
         chrome.runtime.sendMessage({
             type: 'CONTEXT_UPDATED',
-            data: { platform: currentPlatform?.name },
+            data: { platform: parser?.getDetectedPlatform() }
         }).catch(() => { });
     }, 1000);
 }
@@ -163,10 +168,10 @@ document.addEventListener('keydown', (event) => {
             chrome.runtime.sendMessage({
                 type: 'CAPTURED_CONTEXT',
                 data: {
-                    title: `Selection from ${currentPlatform?.name || 'page'}`,
+                    title: `Selection from ${parser?.getDetectedPlatform() || 'page'}`,
                     content: selection.selectedText,
-                    autoSave: false,
-                },
+                    autoSave: false
+                }
             }).catch(console.error);
         }
     }
@@ -174,33 +179,39 @@ document.addEventListener('keydown', (event) => {
     // Ctrl/Cmd + Shift + C = Capture full context
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'c') {
         event.preventDefault();
-        const context = captureContext();
-        if (context) {
-            chrome.runtime.sendMessage({
-                type: 'CAPTURED_CONTEXT',
-                data: {
-                    title: `Conversation from ${currentPlatform?.name || 'chat'}`,
-                    content: JSON.stringify(context.messages, null, 2),
-                    autoSave: false,
-                },
-            }).catch(console.error);
-        }
+        captureContext().then(context => {
+            if (context && context.messages) {
+                chrome.runtime.sendMessage({
+                    type: 'CAPTURED_CONTEXT',
+                    data: {
+                        title: `Conversation from ${context.platform || 'chat'}`,
+                        content: JSON.stringify(context.messages, null, 2),
+                        autoSave: false
+                    }
+                }).catch(console.error);
+            }
+        });
     }
 });
 
 // ============================================
-// Initialization
+// Main Initialization
 // ============================================
 
-function init() {
-    currentPlatform = detectPlatform();
+console.log('Context Bridge: Content script loaded on', window.location.href);
 
-    if (currentPlatform) {
-        console.log(`Context Bridge: Detected ${currentPlatform.name}`);
-        setupObserver();
-    } else {
-        console.log('Context Bridge: No supported platform detected');
-    }
+function init() {
+    console.log('Context Bridge: Starting initialization...');
+    // Wait a bit for dynamic content to load
+    setTimeout(() => {
+        try {
+            initParser();
+            setupObserver();
+            console.log('Context Bridge: Fully initialized');
+        } catch (error) {
+            console.error('Context Bridge: Init error', error);
+        }
+    }, 500);
 }
 
 // Initialize when DOM is ready

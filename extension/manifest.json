@@ -7,10 +7,12 @@
         "storage",
         "sidePanel",
         "activeTab",
-        "identity"
+        "identity",
+        "scripting"
     ],
     "host_permissions": [
         "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
         "https://claude.ai/*",
         "https://gemini.google.com/*",
         "https://*.anthropic.com/*"
@@ -23,10 +25,19 @@
         {
             "matches": [
                 "https://chat.openai.com/*",
+                "https://chatgpt.com/*",
                 "https://claude.ai/*",
                 "https://gemini.google.com/*"
             ],
             "js": [
+                "src/content-scripts/platforms/base.js",
+                "src/content-scripts/platforms/chatgpt.js",
+                "src/content-scripts/platforms/claude.js",
+                "src/content-scripts/platforms/gemini.js",
+                "src/content-scripts/core/auto-discovery.js",
+                "src/content-scripts/processors/content-extractor.js",
+                "src/content-scripts/core/parser.js",
+                "src/content-scripts/core/button-injector.js",
                 "src/content-scripts/core/observer.js"
             ],
             "run_at": "document_idle"
