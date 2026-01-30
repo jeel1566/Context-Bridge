@@ -45,14 +45,14 @@ def curate(req: func.HttpRequest) -> func.HttpResponse:
 # Memory Bank CRUD
 # ============================================
 @app.route(route="memories", methods=["GET", "POST"])
-def memories(req: func.HttpRequest) -> func.HttpResponse:
+async def memories(req: func.HttpRequest) -> func.HttpResponse:
     """GET/POST /api/memories"""
-    return memories_handler(req)
+    return await memories_handler(req)
 
 @app.route(route="memories/{id}", methods=["GET", "PUT", "DELETE"])
-def memory_by_id(req: func.HttpRequest) -> func.HttpResponse:
+async def memory_by_id(req: func.HttpRequest) -> func.HttpResponse:
     """GET/PUT/DELETE /api/memories/:id"""
-    return memories_handler(req)
+    return await memories_handler(req)
 
 # ============================================
 # Collaboration

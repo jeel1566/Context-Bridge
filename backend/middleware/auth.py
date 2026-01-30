@@ -74,6 +74,7 @@ def authenticate_request(req: func.HttpRequest) -> Optional[Dict[str, Any]]:
     
     Checks for JWT token in Authorization header.
     Falls back to X-User-Id header for backwards compatibility.
+    In DEV_MODE, allows unauthenticated requests with a guest user.
     
     Args:
         req: Azure Functions HTTP request
@@ -81,6 +82,8 @@ def authenticate_request(req: func.HttpRequest) -> Optional[Dict[str, Any]]:
     Returns:
         User dict or None if not authenticated
     """
+    import os
+    
     # Try JWT authentication first
     token = extract_token(req)
     if token:
@@ -96,6 +99,16 @@ def authenticate_request(req: func.HttpRequest) -> Optional[Dict[str, Any]]:
             "id": user_id,
             "email": None,
             "legacy": True
+        }
+    
+    # DEV MODE: Allow guest access for local development
+    dev_mode = os.environ.get('DEV_MODE', 'false').lower() == 'true'
+    if dev_mode:
+        logger.warning("DEV_MODE enabled - using guest user (no auth required)")
+        return {
+            "id": "guest-local-dev",
+            "email": "guest@localhost",
+            "guest": True
         }
     
     return None

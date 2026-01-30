@@ -1,68 +1,159 @@
 /**
  * Context Bridge - Side Panel Styles
+ * shadcn/ui Design System + Glassmorphism + Light/Dark Mode
+ * 
+ * Using shadcn's CSS variable naming convention and design tokens
+ * Reference: https://ui.shadcn.com/themes
  */
 
+/* ============================================
+   shadcn CSS Variables - Dark Theme (Default)
+   ============================================ */
+
 :root {
-  --primary: #6366f1;
-  --primary-dark: #4f46e5;
-  --secondary: #64748b;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
-  --bg: #0f172a;
-  --bg-card: #1e293b;
-  --bg-hover: #334155;
-  --text: #f1f5f9;
-  --text-muted: #94a3b8;
-  --border: #334155;
-  --radius: 8px;
-  --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.2);
+  /* shadcn color tokens */
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+
+  --primary: 217.2 91.2% 59.8%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 224.3 76.3% 48%;
+
+  /* shadcn radius */
+  --radius: 0.5rem;
+
+  /* Glassmorphism additions */
+  --glass-bg: hsla(222.2, 84%, 4.9%, 0.8);
+  --glass-border: hsla(217.2, 32.6%, 17.5%, 0.5);
+  --glass-blur: 12px;
+  --glass-shadow: 0 8px 32px hsla(0, 0%, 0%, 0.3);
+
+  /* Success/Warning states */
+  --success: 142.1 76.2% 36.3%;
+  --warning: 38 92% 50%;
 }
+
+/* ============================================
+   shadcn CSS Variables - Light Theme
+   ============================================ */
+
+[data-theme="light"] {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+
+  /* Glassmorphism light mode */
+  --glass-bg: hsla(0, 0%, 100%, 0.8);
+  --glass-border: hsla(214.3, 31.8%, 91.4%, 0.6);
+  --glass-shadow: 0 8px 32px hsla(0, 0%, 0%, 0.1);
+}
+
+/* ============================================
+   Base Styles (shadcn conventions)
+   ============================================ */
 
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  border-color: hsl(var(--border));
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: var(--bg);
-  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
   min-height: 100vh;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.3s, color 0.3s;
 }
 
 #app {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  padding: 16px;
-  gap: 16px;
+  padding: 1rem;
+  gap: 1rem;
 }
 
-/* Header */
+/* ============================================
+   Header
+   ============================================ */
+
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid hsl(var(--border));
 }
 
 .logo {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 .logo-icon {
-  font-size: 24px;
+  font-size: 1.5rem;
 }
 
 .logo h1 {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .auth-status {
@@ -73,35 +164,86 @@ body {
 .user-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 .avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  border: 2px solid hsl(var(--primary));
 }
 
-/* Panels */
-.panel {
-  background: var(--bg-card);
+/* Theme Toggle (shadcn button style) */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  font-weight: 500;
+  height: 2.25rem;
+  width: 2.25rem;
   border-radius: var(--radius);
-  padding: 16px;
-  box-shadow: var(--shadow);
+  border: 1px solid hsl(var(--input));
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.theme-toggle:hover {
+  background-color: hsl(var(--accent));
+  border-color: hsl(var(--ring));
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+[data-theme="light"] .icon-moon {
+  display: none;
+}
+
+:root:not([data-theme="light"]) .icon-sun {
+  display: none;
+}
+
+/* ============================================
+   Card / Panel (shadcn card + glassmorphism)
+   ============================================ */
+
+.panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-radius: var(--radius);
+  border: 1px solid var(--glass-border);
+  padding: 1rem;
+  box-shadow: var(--glass-shadow);
+  transition: all 0.2s;
+}
+
+.panel:hover {
+  border-color: hsl(var(--ring) / 0.5);
 }
 
 .panel h2 {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
-  margin-bottom: 12px;
-  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .panel-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 0.75rem;
 }
 
 .panel-header h2 {
@@ -109,83 +251,116 @@ body {
 }
 
 .panel-small {
-  padding: 12px;
+  padding: 0.75rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-/* Buttons */
+/* ============================================
+   Buttons (shadcn button variants)
+   ============================================ */
+
 .btn {
-  padding: 8px 16px;
-  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 500;
+  height: 2.5rem;
+  padding: 0 1rem;
   border: none;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.2s;
+  transition: background-color 0.2s, opacity 0.2s;
 }
 
+.btn:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* Primary button */
 .btn-primary {
-  background: var(--primary);
-  color: white;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
 }
 
 .btn-primary:hover {
-  background: var(--primary-dark);
+  opacity: 0.9;
 }
 
+/* Secondary/Outline button */
 .btn-secondary {
-  background: var(--bg-hover);
-  color: var(--text);
+  background-color: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  border: 1px solid hsl(var(--input));
 }
 
 .btn-secondary:hover {
-  background: var(--border);
+  background-color: hsl(var(--accent));
 }
 
+/* Ghost/Icon button */
 .btn-icon {
-  padding: 6px 10px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 16px;
+  height: 2.25rem;
+  width: 2.25rem;
+  padding: 0;
+  background-color: transparent;
+  color: hsl(var(--muted-foreground));
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
 }
 
 .btn-icon:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
 }
 
-/* Memory List */
+/* ============================================
+   Memory List
+   ============================================ */
+
 .memories-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0.5rem;
   max-height: 300px;
   overflow-y: auto;
 }
 
 .memory-item {
-  padding: 12px;
-  background: var(--bg);
-  border-radius: 6px;
+  padding: 0.875rem;
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius);
+  border: 1px solid var(--glass-border);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 .memory-item:hover {
-  background: var(--bg-hover);
+  background-color: hsl(var(--accent));
+  border-color: hsl(var(--ring) / 0.5);
 }
 
 .memory-item h3 {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
-  margin-bottom: 4px;
+  margin-bottom: 0.25rem;
+  color: hsl(var(--foreground));
 }
 
 .memory-item p {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -193,131 +368,177 @@ body {
 
 .memory-tags {
   display: flex;
-  gap: 4px;
-  margin-top: 8px;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
 }
 
+/* Badge (shadcn badge) */
 .tag {
-  padding: 2px 8px;
-  background: var(--primary);
-  color: white;
-  border-radius: 12px;
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
 }
 
 .empty-state {
-  color: var(--text-muted);
+  color: hsl(var(--muted-foreground));
   text-align: center;
-  padding: 24px;
-  font-size: 14px;
+  padding: 2rem 1rem;
+  font-size: 0.875rem;
 }
 
-/* Form */
+/* ============================================
+   Form Elements (shadcn input)
+   ============================================ */
+
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 1rem;
 }
 
 .form-group label {
   display: block;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  margin-bottom: 0.375rem;
 }
 
 .form-group input,
 .form-group textarea {
+  display: flex;
   width: 100%;
-  padding: 10px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 14px;
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--input));
+  background-color: hsl(var(--background));
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: hsl(var(--foreground));
+  font-family: inherit;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder {
+  color: hsl(var(--muted-foreground));
 }
 
 .form-group input:focus,
 .form-group textarea:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }
 
 .form-actions {
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   justify-content: flex-end;
 }
 
-/* Sync Status */
+/* ============================================
+   Sync Status
+   ============================================ */
+
 .sync-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 .sync-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--success);
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background-color: hsl(var(--success));
 }
 
 .sync-indicator.syncing {
-  background: var(--warning);
+  background-color: hsl(var(--warning));
   animation: pulse 1s infinite;
 }
 
 .sync-indicator.error {
-  background: var(--danger);
+  background-color: hsl(var(--destructive));
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
-/* Utilities */
+#sync-text {
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ============================================
+   Utilities
+   ============================================ */
+
 .hidden {
   display: none !important;
 }
 
 kbd {
-  padding: 2px 6px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: monospace;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--muted));
+  padding: 0.125rem 0.375rem;
+  font-size: 0.6875rem;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  color: hsl(var(--muted-foreground));
 }
 
 .hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 12px;
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  margin-bottom: 0.75rem;
 }
 
-/* Footer */
+/* ============================================
+   Footer
+   ============================================ */
+
 .footer {
   margin-top: auto;
   text-align: center;
-  font-size: 11px;
-  color: var(--text-muted);
-  padding-top: 12px;
+  font-size: 0.6875rem;
+  color: hsl(var(--muted-foreground));
+  padding-top: 0.75rem;
 }
 
-/* Scrollbar */
+/* ============================================
+   Scrollbar (matches shadcn aesthetic)
+   ============================================ */
+
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 0.5rem;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
+  background: hsl(var(--border));
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--secondary);
+  background: hsl(var(--muted-foreground) / 0.5);
 }
