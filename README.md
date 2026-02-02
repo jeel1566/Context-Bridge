@@ -2,7 +2,14 @@
 
 ChatGPT forgets you when you switch to Claude. Context Bridge fixes that: one click and your AI remembers.
 
-A Chrome extension plus Azure Functions backend that acts as a universal context management layer for major LLMs (ChatGPT, Claude, Gemini). Powered by Google ADK agents and OpenRouter via LiteLLM.
+A Chrome extension plus an Azure Functions backend that acts as a universal context management layer for major LLMs (ChatGPT, Claude, Gemini). Powered by Google ADK agents and OpenRouter via LiteLLM.
+
+## Live Demo
+
+| Component | URL |
+|-----------|-----|
+| Backend API | https://context-bridge-api-dxfhdzabfqgrdhc2.eastus-01.azurewebsites.net/api |
+| Health Check | https://context-bridge-api-dxfhdzabfqgrdhc2.eastus-01.azurewebsites.net/api/health |
 
 ## Features
 
@@ -94,8 +101,10 @@ Create backend/local.settings.json:
     "COSMOS_ENDPOINT": "your-cosmos-endpoint",
     "COSMOS_KEY": "your-cosmos-key",
     "OPENROUTER_API_KEY": "your-openrouter-key",
+    "SUPABASE_URL": "your-supabase-url",
     "SUPABASE_JWT_SECRET": "your-supabase-jwt-secret",
-    "JWT_SECRET_KEY": "your-legacy-jwt-secret"
+    "JWT_SECRET_KEY": "your-legacy-jwt-secret",
+    "ENCRYPTION_KEY": "your-32-byte-hex-key"
   }
 }
 ```
