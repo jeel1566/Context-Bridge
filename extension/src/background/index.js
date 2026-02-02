@@ -9,7 +9,7 @@
  */
 
 //const API_BASE_URL = 'https://context-bridge.azurewebsites.net/api';
-const API_BASE_URL = 'http://localhost:7071/api'; // For local development
+const API_BASE_URL = 'https://context-bridge-api-dxfhdzabfqgrdhc2.eastus-01.azurewebsites.net/api';
 
 // ============================================
 // Side Panel Management
