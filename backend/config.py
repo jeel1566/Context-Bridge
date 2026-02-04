@@ -41,6 +41,20 @@ class Settings(BaseSettings):
         alias="GEMINI_API_KEY"
     )
     
+    # OpenRouter API
+    openrouter_api_key: Optional[SecretStr] = Field(
+        default=None,
+        alias="OPENROUTER_API_KEY"
+    )
+    openrouter_model: str = Field(
+        default="openai/gpt-oss-120b:free",
+        alias="OPENROUTER_MODEL"
+    )
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1",
+        alias="OPENROUTER_BASE_URL"
+    )
+    
     # Cosmos DB
     cosmos_endpoint: Optional[str] = Field(
         default=None,
@@ -112,6 +126,11 @@ class Settings(BaseSettings):
         return None
     
     @property
+    def openrouter_configured(self) -> bool:
+        """Check if OpenRouter is configured."""
+        return bool(self.openrouter_api_key)
+    
+    @property
     def is_production(self) -> bool:
         """Check if running in production."""
         return self.environment.lower() == "production"
@@ -152,6 +171,9 @@ def get_settings() -> Settings:
     logger.info(f"Encryption configured: {settings.encryption_configured}")
     logger.info(f"JWT configured: {settings.jwt_configured}")
     logger.info(f"Google API key configured: {settings.effective_google_api_key is not None}")
+    logger.info(f"OpenRouter configured: {settings.openrouter_configured}")
+    if settings.openrouter_configured:
+        logger.info(f"OpenRouter model: {settings.openrouter_model}")
     
     return settings
 

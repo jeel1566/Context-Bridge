@@ -1,5 +1,5 @@
 """
-Context Bridge Processor Agent - Main processing using Gemini 3 Pro
+Context Bridge Processor Agent - Main processing using OpenRouter
 
 This agent handles the core context processing:
 - PII detection and redaction
@@ -7,59 +7,19 @@ This agent handles the core context processing:
 - Personality profile application
 - Context formatting for target LLMs
 
-Based on Google ADK documentation: https://google.github.io/adk-docs/
+Now using OpenRouter API: https://openrouter.ai/docs
 """
 
-from google.adk.agents import LlmAgent
 import json
 import re
+import logging
 from typing import Optional, List
 
 
-def redact_pii(text: str, pii_type: str) -> dict:
-    """
-    Tool to help track PII that was detected and redacted.
-    
-    Args:
-        text: Original text with PII
-        pii_type: Type of PII detected (API_KEY, EMAIL, PASSWORD, etc.)
-        
-    Returns:
-        Redaction info with original length and type
-    """
-    return {
-        "original_length": len(text),
-        "pii_type": pii_type,
-        "redacted": True
-    }
+logger = logging.getLogger(__name__)
 
-
-def format_for_llm(text: str, target_llm: str, personality: str) -> dict:
-    """
-    Tool to format context for a specific LLM and personality.
-    
-    Args:
-        text: The context text to format
-        target_llm: Target LLM (chatgpt, claude, gemini)
-        personality: Personality profile to apply
-        
-    Returns:
-        Formatting info with target and status
-    """
-    return {
-        "target": target_llm,
-        "personality": personality,
-        "formatted": True
-    }
-
-
-# Context Processor Agent - Uses Gemini 3 Pro for complex processing
-# Following ADK pattern: https://google.github.io/adk-docs/agents/llm-agents/
-context_processor = LlmAgent(
-    model='gemini-3-pro-preview',
-    name='context_processor',
-    description='Processes context for Context Bridge: sanitizes PII, checks for injection, applies personality profiles.',
-    instruction="""You are the Context Bridge Processor, the core processing agent for a universal AI context management tool.
+# Context processor instruction prompt
+CONTEXT_PROCESSOR_INSTRUCTION = """You are the Context Bridge Processor, the core processing agent for a universal AI context management tool.
 
 ## YOUR RESPONSIBILITIES:
 
@@ -129,7 +89,7 @@ Adjust context format for the target:
 - **Gemini**: Clean formatting, supports markdown
 
 ## OUTPUT FORMAT
-Always return a JSON object:
+Always respond with a JSON object:
 {
     "sanitized_text": "The processed and safe text",
     "pii_found": [{"type": "API_KEY", "redacted": true}],
@@ -140,73 +100,76 @@ Always return a JSON object:
     "token_estimate": 150,
     "safety_wrapped": false
 }
-""",
-    tools=[redact_pii, format_for_llm],
-    output_key="processing_result",  # Store result in session state
-)
+"""
 
 
-# Pre-compiled regex patterns for common PII
+# Quick PII detection patterns (run before LLM to save tokens)
 PII_PATTERNS = {
-    'API_KEY': [
-        r'sk-[a-zA-Z0-9]{32,}',  # OpenAI
-        r'sk_live_[a-zA-Z0-9]+',  # Stripe
-        r'sk_test_[a-zA-Z0-9]+',  # Stripe test
+    "api_key": [
+        r'sk-[a-zA-Z0-9]{20,}',  # OpenAI style
+        r'sk_live_[a-zA-Z0-9]{24,}',  # Stripe
         r'AKIA[0-9A-Z]{16}',  # AWS
+        r'ya29\.[0-9A-Za-z\-_]+',  # Google OAuth
         r'ghp_[a-zA-Z0-9]{36}',  # GitHub
-        r'gho_[a-zA-Z0-9]{36}',  # GitHub OAuth
-        r'AIza[0-9A-Za-z\-_]{35}',  # Google API
     ],
-    'EMAIL': [
-        r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+    "email": [
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
     ],
-    'PHONE': [
-        r'\+?1?[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}',
+    "credit_card": [
+        r'\b(?:\d{4}[-\s]?){3}\d{4}\b',  # 16 digit cards
     ],
-    'CREDIT_CARD': [
-        r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b',
+    "phone": [
+        r'\b\+?1?\d{10,14}\b',  # Phone numbers
+    ],
+    "ssn": [
+        r'\b\d{3}-\d{2}-\d{4}\b',  # SSN format
     ],
 }
 
 
 def quick_pii_scan(text: str) -> List[dict]:
     """
-    Quick regex-based PII scan before sending to agent.
-    This catches obvious PII without using tokens.
+    Quick PII scan using regex patterns (runs before LLM call).
     
     Args:
-        text: Text to scan for PII
+        text: Text to scan
         
     Returns:
-        List of found PII items with type and redacted status
+        List of detected PII items
     """
     found = []
+    
     for pii_type, patterns in PII_PATTERNS.items():
         for pattern in patterns:
-            matches = re.findall(pattern, text)
+            matches = re.finditer(pattern, text, re.IGNORECASE)
             for match in matches:
                 found.append({
-                    "type": pii_type,
-                    "match": match[:10] + "..." if len(match) > 10 else match,
-                    "redacted": True
+                    "type": pii_type.upper(),
+                    "position": match.span(),
+                    "redacted": False  # Will be redacted by quick_redact
                 })
+    
     return found
 
 
 def quick_redact(text: str) -> str:
     """
-    Quick regex-based redaction for obvious PII patterns.
+    Quick PII redaction using regex patterns.
     
     Args:
-        text: Text to redact PII from
+        text: Text to redact
         
     Returns:
-        Text with PII replaced by [REDACTED: TYPE] markers
+        Text with PII redacted
     """
     result = text
+    
+    # Redact in reverse order of specificity
     for pii_type, patterns in PII_PATTERNS.items():
+        replacement = f"[REDACTED: {pii_type.upper()}]"
         for pattern in patterns:
-            result = re.sub(pattern, f'[REDACTED: {pii_type}]', result)
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    
     return result
 
 
@@ -216,7 +179,7 @@ async def process_context(
     target_llm: str = "chatgpt"
 ) -> dict:
     """
-    Main processing function for context.
+    Main processing function for context using OpenRouter.
     
     Args:
         text: The context text to process
@@ -226,28 +189,19 @@ async def process_context(
     Returns:
         Processed context dictionary with sanitized text and metadata
     """
-    from google.adk.runners import Runner
-    from google.adk.sessions import InMemorySessionService
-    from google.genai import types
+    from backend.services.openrouter_service import get_openrouter_service
     
     # Step 1: Quick PII scan and redaction (saves tokens)
     quick_pii = quick_pii_scan(text)
     pre_sanitized = quick_redact(text) if quick_pii else text
     
-    # Step 2: Agent processing for complex detection
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=context_processor,
-        app_name="context_bridge",
-        session_service=session_service
-    )
-    
-    session = await session_service.create_session(
-        app_name="context_bridge",
-        user_id="system"
-    )
-    
-    prompt = f"""Process this context for Context Bridge:
+    try:
+        # Step 2: Agent processing for complex detection
+        service = await get_openrouter_service()
+        
+        prompt = f"""{CONTEXT_PROCESSOR_INSTRUCTION}
+
+Process this context for Context Bridge:
 
 TEXT TO PROCESS:
 {pre_sanitized}
@@ -257,35 +211,63 @@ SETTINGS:
 - Target LLM: {target_llm}
 
 Please sanitize, check for injection, and format appropriately."""
-    
-    user_content = types.Content(role='user', parts=[types.Part(text=prompt)])
-    
-    response_text = None
-    async for event in runner.run_async(
-        user_id="system",
-        session_id=session.id,
-        new_message=user_content
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            response_text = event.content.parts[0].text
-    
-    try:
-        if response_text:
+        
+        messages = [{"role": "user", "content": prompt}]
+        
+        logger.info(f"Processing context with OpenRouter (personality={personality}, target={target_llm})...")
+        response = await service.chat_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        response_text = response.content
+        logger.debug(f"Processing response: {response_text[:200]}...")
+        
+        # Try to parse JSON response
+        try:
             result = json.loads(response_text)
             # Merge quick scan results
             if quick_pii:
                 result["pii_found"] = quick_pii + result.get("pii_found", [])
             return result
-    except json.JSONDecodeError:
-        pass
-    
-    # Fallback response
-    return {
-        "sanitized_text": pre_sanitized,
-        "pii_found": quick_pii,
-        "injection_detected": False,
-        "personality_applied": personality,
-        "target_llm": target_llm,
-        "token_estimate": len(pre_sanitized.split()),
-        "safety_wrapped": False
-    }
+        except json.JSONDecodeError:
+            pass
+        
+        # Try to extract JSON from markdown
+        json_match = re.search(r'```json?\s*(.*?)\s*```', response_text, re.DOTALL)
+        if json_match:
+            try:
+                result = json.loads(json_match.group(1))
+                if quick_pii:
+                    result["pii_found"] = quick_pii + result.get("pii_found", [])
+                return result
+            except json.JSONDecodeError:
+                pass
+        
+        # Fallback: return pre-sanitized text
+        logger.warning("Failed to parse processing response, using fallback")
+        return {
+            "sanitized_text": pre_sanitized,
+            "pii_found": quick_pii,
+            "injection_detected": False,
+            "personality_applied": personality,
+            "target_llm": target_llm,
+            "token_estimate": len(pre_sanitized.split()),
+            "safety_wrapped": False,
+            "parse_fallback": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Context processing error: {e}", exc_info=True)
+        # Return safe fallback
+        return {
+            "sanitized_text": quick_redact(text),
+            "pii_found": quick_pii_scan(text),
+            "injection_detected": False,
+            "personality_applied": personality,
+            "target_llm": target_llm,
+            "token_estimate": len(text.split()),
+            "safety_wrapped": False,
+            "error": str(e)
+        }
