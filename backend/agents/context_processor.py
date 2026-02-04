@@ -24,6 +24,7 @@ from google.adk.runners import Runner
 
 from backend.agents.session_manager import get_session_service
 from backend.services.pii_detector import get_pii_detector
+from backend.services.injection_detector import get_injection_detector
 
 from backend.config import get_settings
 
@@ -209,7 +210,27 @@ async def process_context(
     Returns:
         Processed context dictionary with sanitized text and metadata
     """
-    # Step 1: Quick PII scan and redaction using comprehensive service
+    # Step 1: Injection detection (FIRST - blocks malicious input early)
+    injection_detector = get_injection_detector()
+    injection_check = injection_detector.detect(text)
+    
+    if injection_check["injection_detected"]:
+        logger.warning(
+            f"Blocked injection attempt: {injection_check['attack_types']}, "
+            f"threat={injection_check['threat_level']}, matches={len(injection_check['matches'])}"
+        )
+        return {
+            "error": "Potential prompt injection detected",
+            "injection_detected": True,
+            "attack_types": injection_check["attack_types"],
+            "threat_level": injection_check["threat_level"],
+            "confidence": injection_check["confidence"],
+            "blocked": True,
+            "sanitized_text": "",  # Don't process malicious input
+            "pii_found": []
+        }
+    
+    # Step 2: PII detection and redaction (after injection check passes)
     pii_detector = get_pii_detector()
     pii_result = pii_detector.process(text)
     
