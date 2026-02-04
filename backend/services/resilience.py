@@ -1,20 +1,23 @@
 """
 Resilience Service for Production AI Applications
 
-Provides retry logic with exponential backoff and jitter for handling
-transient failures in LLM API calls.
+Provides retry logic with exponential backoff, jitter, and circuit breaker
+pattern for handling transient failures in LLM API calls.
 
 Features:
 - Exponential backoff (1s, 2s, 4s...)
 - Jitter to prevent thundering herd
 - Configurable max retries
 - Selective retry (retries transient errors, not validation errors)
+- Circuit breaker (Issue #8) - fails fast when service is down
 """
 import asyncio
 import random
 import logging
-from typing import Callable, TypeVar, Any
+import time
+from typing import Callable, TypeVar, Any, Optional
 from functools import wraps
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,132 @@ T = TypeVar('T')
 class RetryExhaustedError(Exception):
     """Raised when all retry attempts have been exhausted."""
     pass
+
+
+class CircuitBreakerOpen(Exception):
+    """Raised when circuit breaker is OPEN (failing fast)."""
+    pass
+
+
+class CircuitBreaker:
+    """
+    Circuit breaker pattern for API resilience.
+    
+    States:
+    - CLOSED: Normal operation, requests pass through
+    - OPEN: Failed repeatedly, reject immediately (fail fast)
+    - HALF_OPEN: Testing if service recovered
+    
+    Prevents cascading failures by failing fast when service is down.
+    """
+    
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        expected_exception: type = Exception
+    ):
+        """
+        Initialize circuit breaker.
+        
+        Args:
+            failure_threshold: Number of failures before opening circuit
+            recovery_timeout: Seconds to wait before trying again
+            expected_exception: Exception type to catch
+        """
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.expected_exception = expected_exception
+        
+        self.failure_count = 0
+        self.last_failure_time: Optional[float] = None
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        
+        logger.info(
+            f"CircuitBreaker initialized (threshold={failure_threshold}, "
+            f"recovery={recovery_timeout}s)"
+        )
+    
+    def _should_attempt_reset(self) -> bool:
+        """Check if enough time has passed to try recovery."""
+        if self.last_failure_time is None:
+            return True
+        
+        elapsed = time.time() - self.last_failure_time
+        return elapsed >= self.recovery_timeout
+    
+    def _on_success(self) -> None:
+        """Handle successful call."""
+        if self.state == "HALF_OPEN":
+            logger.info("Circuit breaker: Recovery successful, closing circuit")
+            self.state = "CLOSED"
+            self.failure_count = 0
+        elif self.state == "CLOSED":
+            # Reset failure count on success
+            if self.failure_count > 0:
+                logger.debug(f"Circuit breaker: Reset failure count (was {self.failure_count})")
+                self.failure_count = 0
+    
+    def _on_failure(self) -> None:
+        """Handle failed call."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        
+        if self.state == "HALF_OPEN":
+            logger.warning("Circuit breaker: Half-open test failed, reopening circuit")
+            self.state = "OPEN"
+        elif self.failure_count >= self.failure_threshold:
+            logger.error(
+                f"Circuit breaker: Threshold reached ({self.failure_count} failures), "
+                "opening circuit"
+            )
+            self.state = "OPEN"
+    
+    async def call(self, func: Callable[..., T], *args, **kwargs) -> T:
+        """
+        Execute function through circuit breaker.
+        
+        Args:
+            func: Async function to call
+            *args: Positional arguments
+            **kwargs: Keyword arguments
+            
+        Returns:
+            Result from func
+            
+        Raises:
+            CircuitBreakerOpen: If circuit is open
+            Exception: From func if it fails
+        """
+        # Check if circuit is open
+        if self.state == "OPEN":
+            if self._should_attempt_reset():
+                logger.info("Circuit breaker: Attempting recovery (HALF_OPEN)")
+                self.state = "HALF_OPEN"
+            else:
+                remaining = self.recovery_timeout - (time.time() - self.last_failure_time)
+                raise CircuitBreakerOpen(
+                    f"Circuit breaker is OPEN. Retry in {remaining:.1f}s"
+                )
+        
+        # Attempt the call
+        try:
+            result = await func(*args, **kwargs)
+            self._on_success()
+            return result
+        except self.expected_exception as e:
+            self._on_failure()
+            raise
+    
+    def get_state(self) -> dict:
+        """Get current circuit breaker state."""
+        return {
+            "state": self.state,
+            "failure_count": self.failure_count,
+            "threshold": self.failure_threshold,
+            "last_failure": datetime.fromtimestamp(self.last_failure_time).isoformat()
+                if self.last_failure_time else None
+        }
 
 
 async def retry_with_backoff(
