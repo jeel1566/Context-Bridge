@@ -23,6 +23,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 
 from backend.agents.session_manager import get_session_service
+from backend.services.pii_detector import get_pii_detector
 
 from backend.config import get_settings
 
@@ -112,74 +113,7 @@ Always respond with a JSON object:
 }
 """
 
-# Quick PII detection patterns (run before LLM to save tokens)
-PII_PATTERNS = {
-    "api_key": [
-        r'sk-[a-zA-Z0-9]{20,}',  # OpenAI style
-        r'sk_live_[a-zA-Z0-9]{24,}',  # Stripe
-        r'AKIA[0-9A-Z]{16}',  # AWS
-        r'ya29\.[0-9A-Za-z\-_]+',  # Google OAuth
-        r'ghp_[a-zA-Z0-9]{36}',  # GitHub
-    ],
-    "email": [
-        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-    ],
-    "credit_card": [
-        r'\b(?:\d{4}[-\s]?){3}\d{4}\b',  # 16 digit cards
-    ],
-    "phone": [
-        r'\b\+?1?\d{10,14}\b',  # Phone numbers
-    ],
-    "ssn": [
-        r'\b\d{3}-\d{2}-\d{4}\b',  # SSN format
-    ],
-}
 
-
-def quick_pii_scan(text: str) -> List[dict]:
-    """
-    Quick PII scan using regex patterns (runs before LLM call).
-    
-    Args:
-        text: Text to scan
-        
-    Returns:
-        List of detected PII items
-    """
-    found = []
-    
-    for pii_type, patterns in PII_PATTERNS.items():
-        for pattern in patterns:
-            matches = re.finditer(pattern, text, re.IGNORECASE)
-            for match in matches:
-                found.append({
-                    "type": pii_type.upper(),
-                    "position": match.span(),
-                    "redacted": False  # Will be redacted by quick_redact
-                })
-    
-    return found
-
-
-def quick_redact(text: str) -> str:
-    """
-    Quick PII redaction using regex patterns.
-    
-    Args:
-        text: Text to redact
-        
-    Returns:
-        Text with PII redacted
-    """
-    result = text
-    
-    # Redact in reverse order of specificity
-    for pii_type, patterns in PII_PATTERNS.items():
-        replacement = f"[REDACTED: {pii_type.upper()}]"
-        for pattern in patterns:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-    
-    return result
 
 
 # Get settings
@@ -275,9 +209,13 @@ async def process_context(
     Returns:
         Processed context dictionary with sanitized text and metadata
     """
-    #Step 1: Quick PII scan and redaction (saves tokens)
-    quick_pii = quick_pii_scan(text)
-    pre_sanitized = quick_redact(text) if quick_pii else text
+    # Step 1: Quick PII scan and redaction using comprehensive service
+    pii_detector = get_pii_detector()
+    pii_result = pii_detector.process(text)
+    
+    # Extract results from detector
+    pii_found = pii_result["pii_found"]
+    pre_sanitized = pii_result["sanitized_text"]
     
     try:
         logger.info(f"Processing context with ADK+LiteLLM (timeout={timeout_seconds}s, personality={personality}, target={target_llm})...")
@@ -288,9 +226,9 @@ async def process_context(
             timeout=timeout_seconds
         )
         
-        # Merge quick PII scan results if available
-        if quick_pii and isinstance(result, dict):
-            result["pii_found"] = quick_pii + result.get("pii_found", [])
+        # Merge PII scan results if available
+        if pii_found and isinstance(result, dict):
+            result["pii_found"] = pii_found + result.get("pii_found", [])
         
         logger.info(f"Processing complete: pii_found={len(result.get('pii_found', []) if isinstance(result, dict) else [])}, injection={result.get('injection_detected') if isinstance(result, dict) else False}")
         return result
@@ -301,7 +239,7 @@ async def process_context(
         return {
             "error": f"Processing timeout ({timeout_seconds}s)",
             "sanitized_text": pre_sanitized,  # At least return pre-sanitized
-            "pii_found": quick_pii,
+            "pii_found": pii_found,
             "injection_detected": False,
             "personality_applied": personality,
             "target_llm": target_llm,
@@ -314,7 +252,7 @@ async def process_context(
         return {
             "error": str(e),
             "sanitized_text": pre_sanitized,
-            "pii_found": quick_pii,
+            "pii_found": pii_found,
             "injection_detected": False,
             "personality_applied": personality,
             "target_llm": target_llm,
