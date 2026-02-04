@@ -1,13 +1,14 @@
 """
-Context Bridge Processor Agent - Main processing using OpenRouter
+Context Bridge Processor Agent - Using Google ADK + LiteLLM
 
-This agent handles the core context processing:
+This agent handles core context processing using Google ADK orchestration with LiteLLM
+as the model provider, connecting to Open Router's free gpt-oss-120b model.
+
+Responsibilities:
 - PII detection and redaction
 - Prompt injection defense
 - Personality profile application
 - Context formatting for target LLMs
-
-Now using OpenRouter API: https://openrouter.ai/docs
 """
 
 import json
@@ -15,6 +16,12 @@ import re
 import logging
 from typing import Optional, List
 
+from google.adk.agents import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+
+from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +109,6 @@ Always respond with a JSON object:
 }
 """
 
-
 # Quick PII detection patterns (run before LLM to save tokens)
 PII_PATTERNS = {
     "api_key": [
@@ -173,13 +179,29 @@ def quick_redact(text: str) -> str:
     return result
 
 
+# Get settings
+settings = get_settings()
+
+# Configure context processor agent
+# Note: API key is set via OPENROUTER_API_KEY environment variable
+context_processor = LlmAgent(
+    model=LiteLlm(
+        model=f"openrouter/{settings.openrouter_model}",
+    ),
+    name='context_processor',
+    description="Context Processor for Context Bridge - handles PII detection, injection defense, and personality profiles",
+    instruction=CONTEXT_PROCESSOR_INSTRUCTION,
+    # Note: JSON output format is enforced via instruction, not response_format parameter
+)
+
+
 async def process_context(
     text: str,
     personality: str = "senior-dev",
     target_llm: str = "chatgpt"
 ) -> dict:
     """
-    Main processing function for context using OpenRouter.
+    Main processing function for context using Google ADK + LiteLLM + OpenRouter.
     
     Args:
         text: The context text to process
@@ -189,15 +211,16 @@ async def process_context(
     Returns:
         Processed context dictionary with sanitized text and metadata
     """
-    from backend.services.openrouter_service import get_openrouter_service
-    
     # Step 1: Quick PII scan and redaction (saves tokens)
     quick_pii = quick_pii_scan(text)
     pre_sanitized = quick_redact(text) if quick_pii else text
     
     try:
-        # Step 2: Agent processing for complex detection
-        service = await get_openrouter_service()
+        logger.info(f"Processing context with ADK+LiteLLM (personality={personality}, target={target_llm})...")
+        
+        # Step 2: ADK agent processing
+        runner = Runner()
+        session = InMemorySessionService()
         
         prompt = f"""{CONTEXT_PROCESSOR_INSTRUCTION}
 
@@ -212,30 +235,27 @@ SETTINGS:
 
 Please sanitize, check for injection, and format appropriately."""
         
-        messages = [{"role": "user", "content": prompt}]
-        
-        logger.info(f"Processing context with OpenRouter (personality={personality}, target={target_llm})...")
-        response = await service.chat_completion(
-            messages=messages,
-            temperature=0.7,
-            max_tokens=2000
+        response = await runner.run(
+            agent=context_processor,
+            user_message=prompt,
+            session_service=session,
         )
         
-        response_text = response.content
-        logger.debug(f"Processing response: {response_text[:200]}...")
+        logger.debug(f"Processing response: {response.content[:200]}...")
         
         # Try to parse JSON response
         try:
-            result = json.loads(response_text)
+            result = json.loads(response.content)
             # Merge quick scan results
             if quick_pii:
                 result["pii_found"] = quick_pii + result.get("pii_found", [])
+            logger.info(f"Processing complete: pii_found={len(result.get('pii_found', []))}, injection={result.get('injection_detected')}")
             return result
         except json.JSONDecodeError:
             pass
         
         # Try to extract JSON from markdown
-        json_match = re.search(r'```json?\s*(.*?)\s*```', response_text, re.DOTALL)
+        json_match = re.search(r'```json?\s*(.*?)\s*```', response.content, re.DOTALL)
         if json_match:
             try:
                 result = json.loads(json_match.group(1))
