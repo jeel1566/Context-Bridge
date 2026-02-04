@@ -35,6 +35,13 @@ const elements = {
     syncIndicator: $('#sync-indicator'),
     syncText: $('#sync-text'),
     themeToggle: $('#theme-toggle'),
+    personalitySelector: $('#personality-selector'),
+    sharePanel: $('#share-panel'),
+    shareLink: $('#share-link'),
+    copyLinkBtn: $('#copy-link-btn'),
+    inviteEmail: $('#invite-email'),
+    inviteBtn: $('#invite-btn'),
+    closeShareBtn: $('#close-share-btn'),
 };
 
 // ============================================
@@ -63,11 +70,27 @@ function toggleTheme() {
 }
 
 // ============================================
+// Personality Management
+// ============================================
+
+async function initPersonality() {
+    const result = await chrome.storage.local.get(['personality']);
+    if (result.personality) {
+        elements.personalitySelector.value = result.personality;
+    }
+}
+
+function handlePersonalityChange() {
+    const personality = elements.personalitySelector.value;
+    chrome.storage.local.set({ personality });
+}
+
+// ============================================
 // API Communication
 // ============================================
 
 async function sendMessage(type, data = {}) {
-    return chrome.runtime.sendMessage({ type, data, ...data });
+    return chrome.runtime.sendMessage({ type, ...data });
 }
 
 // ============================================
@@ -142,19 +165,33 @@ function renderMemories() {
 
     elements.memoriesList.innerHTML = memories.map(memory => `
     <div class="memory-item" data-id="${memory.id}">
-      <h3>${escapeHtml(memory.title)}</h3>
-      <p>${escapeHtml(truncate(memory.content, 80))}</p>
-      ${memory.tags?.length ? `
+        <div class="memory-header">
+            <h3>${escapeHtml(memory.title)}</h3>
+            <button class="btn-icon-sm share-btn" data-id="${memory.id}" title="Share">🔗</button>
+        </div>
+        <p>${escapeHtml(truncate(memory.content, 80))}</p>
+        ${memory.tags?.length ? `
         <div class="memory-tags">
           ${memory.tags.slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
         </div>
       ` : ''}
     </div>
-  `).join('');
+    `).join('');
 
     // Add click handlers
     $$('.memory-item').forEach(item => {
-        item.addEventListener('click', () => editMemory(item.dataset.id));
+        item.addEventListener('click', (e) => {
+            // Don't trigger edit if share button was clicked
+            if (e.target.closest('.share-btn')) return;
+            editMemory(item.dataset.id);
+        });
+    });
+
+    $$('.share-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openSharePanel(btn.dataset.id);
+        });
     });
 }
 
@@ -205,6 +242,7 @@ async function saveMemory(event) {
         title: elements.memoryTitle.value.trim(),
         content: elements.memoryContent.value.trim(),
         tags: elements.memoryTags.value.split(',').map(t => t.trim()).filter(Boolean),
+        personality: elements.personalitySelector.value,
     };
 
     try {
@@ -286,10 +324,15 @@ async function captureContext() {
         }
 
         if (response && response.messages && response.messages.length > 0) {
+            const platform = response.platform || new URL(tab.url).hostname.replace('www.', '').split('.')[0];
+            const platformNames = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' };
+            const displayName = platformNames[platform] || platform;
+            const timestamp = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
             showEditor({
-                title: `Conversation from ${new URL(tab.url).hostname}`,
-                content: response.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
-                tags: [response.platform || 'chat'],
+                title: `${displayName} Conversation - ${timestamp} `,
+                content: response.messages.map(m => `${m.role}: ${m.content} `).join('\n\n'),
+                tags: [platform, 'conversation'],
             });
         } else {
             alert('No conversation found on this page. Make sure there are messages in the chat.');
@@ -298,6 +341,56 @@ async function captureContext() {
         console.error('Capture failed:', error);
         alert('Capture failed. Please refresh the ChatGPT/Claude/Gemini page and try again.');
     }
+}
+
+// ============================================
+// Share Functionality
+// ============================================
+
+function openSharePanel(memoryId) {
+    const memory = memories.find(m => m.id === memoryId);
+    if (!memory) return;
+
+    // Mock link generation
+    const mockLink = `https://context-bridge.web.app/share/${memoryId}`;
+    elements.shareLink.value = mockLink;
+    elements.inviteEmail.value = '';
+
+    elements.sharePanel.classList.remove('hidden');
+    // Hide other panels if needed, or just overlay
+    elements.memoryEditor.classList.add('hidden');
+}
+
+function closeSharePanel() {
+    elements.sharePanel.classList.add('hidden');
+}
+
+function copyShareLink() {
+    elements.shareLink.select();
+    document.execCommand('copy');
+
+    const originalText = elements.copyLinkBtn.textContent;
+    elements.copyLinkBtn.textContent = 'Copied!';
+    setTimeout(() => {
+        elements.copyLinkBtn.textContent = originalText;
+    }, 2000);
+}
+
+async function sendInvite() {
+    const email = elements.inviteEmail.value.trim();
+    if (!email) return;
+
+    elements.inviteBtn.textContent = 'Sending...';
+    elements.inviteBtn.disabled = true;
+
+    // Simulate API call
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    alert(`Invite sent to ${email}`);
+
+    elements.inviteBtn.textContent = 'Invite';
+    elements.inviteBtn.disabled = false;
+    elements.inviteEmail.value = '';
 }
 
 // ============================================
@@ -374,6 +467,10 @@ elements.cancelBtn?.addEventListener('click', hideEditor);
 elements.memoryForm?.addEventListener('submit', saveMemory);
 elements.syncBtn?.addEventListener('click', syncNow);
 elements.themeToggle?.addEventListener('click', toggleTheme);
+elements.personalitySelector?.addEventListener('change', handlePersonalityChange);
+elements.closeShareBtn?.addEventListener('click', closeSharePanel);
+elements.copyLinkBtn?.addEventListener('click', copyShareLink);
+elements.inviteBtn?.addEventListener('click', sendInvite);
 
 // ============================================
 // Initialization
@@ -382,6 +479,7 @@ elements.themeToggle?.addEventListener('click', toggleTheme);
 async function init() {
     // Initialize theme
     initTheme();
+    initPersonality();
 
     // Check auth and load data
     const isAuthenticated = await checkAuthStatus();
