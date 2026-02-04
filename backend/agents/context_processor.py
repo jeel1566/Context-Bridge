@@ -25,6 +25,7 @@ from google.adk.runners import Runner
 from backend.agents.session_manager import get_session_service
 from backend.services.pii_detector import get_pii_detector
 from backend.services.injection_detector import get_injection_detector
+from backend.services.personality_profiles import get_personality_service
 
 from backend.config import get_settings
 
@@ -147,6 +148,10 @@ async def _process_context_impl(
     runner = Runner()
     session = get_session_service()  # Singleton - prevents memory leaks
     
+    # Get personality profile instructions
+    personality_service = get_personality_service()
+    personality_instructions = personality_service.get_instructions(personality)
+    
     prompt = f"""{CONTEXT_PROCESSOR_INSTRUCTION}
 
 Process this context for Context Bridge:
@@ -155,10 +160,11 @@ TEXT TO PROCESS:
 {pre_sanitized}
 
 SETTINGS:
-- Personality: {personality}
 - Target LLM: {target_llm}
 
-Please sanitize, check for injection, and format appropriately."""
+{personality_instructions}
+
+Please sanitize, check for injection, and format appropriately according to the personality profile."""
     
     response = await runner.run(
         agent=context_processor,
