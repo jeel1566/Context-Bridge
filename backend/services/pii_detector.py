@@ -72,6 +72,18 @@ PII_PATTERNS = {
     "bearer_token": [
         r'\bBearer\s+[a-zA-Z0-9_-]{20,}\b',
     ],
+    # Additional PII types (Issue #11)
+    "drivers_license": [
+        r'\b[A-Z]{1,2}\d{6,8}\b',  # Most US states
+        r'\b[A-Z]\d{7}\b',  # Some states
+    ],
+    "vin": [
+        r'\b[A-HJ-NPR-Z0-9]{17}\b',  # Vehicle Identification Number
+    ],
+    "healthcare_id": [
+        r'\b\d{3}-\d{2}-\d{4}\b',  # Similar to SSN format
+        r'\bH\d{9}\b',  # Some healthcare IDs
+    ],
     "aws_secret": [
         r'\b[A-Za-z0-9/+=]{40}\b',  # AWS Secret Access Key
     ],
