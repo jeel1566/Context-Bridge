@@ -10,6 +10,7 @@ Benefits of ADK + LiteLLM approach:
 - OpenRouter: Free tier, zero API costs
 """
 
+import asyncio
 import json
 import re
 import logging
@@ -109,12 +110,64 @@ scope_validator = LlmAgent(
 )
 
 
-async def validate_input(text: str) -> dict:
+async def _validate_input_impl(text: str) -> dict:
     """
-    Validate user input using Google ADK + LiteLLM + OpenRouter.
+    Internal implementation of validation (without timeout wrapper).
+    
+    This function does the actual validation work and is wrapped by
+    validate_input() which adds timeout protection.
+    """
+    # Create runner and session
+    runner = Runner()
+    session = InMemorySessionService()
+    
+    # Execute agent
+    response = await runner.run(
+        agent=scope_validator,
+        user_message=f"Validate this input:\n\n{text}",
+        session_service=session,
+    )
+    
+    logger.debug(f"Validator response: {response.content[:200]}...")
+    
+    # Try to parse JSON response
+    try:
+        result = json.loads(response.content)
+        if "allowed" in result:
+            logger.info(f"Validation result: allowed={result.get('allowed')}, category={result.get('category')}")
+            return result
+    except json.JSONDecodeError:
+        pass
+    
+    # Try to extract JSON from markdown code block
+    json_match = re.search(r'```json?\s*(.*?)\s*```', response.content, re.DOTALL)
+    if json_match:
+        try:
+            result = json.loads(json_match.group(1))
+            if "allowed" in result:
+                logger.info(f"Validation result (from markdown): allowed={result.get('allowed')}")
+                return result
+        except json.JSONDecodeError:
+            pass
+    
+    # FAIL CLOSED - deny on parse failure for security
+    logger.error(f"Failed to parse validation response: {response.content[:100]}")
+    return {
+        "allowed": False,
+        "reason": "Parse failure - denied for safety",
+        "category": "invalid",
+        "confidence": 0.0,
+        "parse_error": True
+    }
+
+
+async def validate_input(text: str, timeout_seconds: int = 30) -> dict:
+    """
+    Validate user input using Google ADK + LiteLLM + OpenRouter with timeout protection.
     
     Args:
         text: User input to validate
+        timeout_seconds: Maximum time to wait for validation (default: 30s)
         
     Returns:
         Validation result with fail-closed security pattern:
@@ -134,49 +187,24 @@ async def validate_input(text: str) -> dict:
         }
     
     try:
-        logger.info(f"Validating input with ADK+LiteLLM (model={settings.openrouter_model})...")
+        logger.info(f"Validating input with ADK+LiteLLM (timeout={timeout_seconds}s, model={settings.openrouter_model})...")
         
-        # Create runner and session
-        runner = Runner()
-        session = InMemorySessionService()
-        
-        # Execute agent
-        response = await runner.run(
-            agent=scope_validator,
-            user_message=f"Validate this input:\n\n{text}",
-            session_service=session,
+        # Wrap in timeout protection - fail closed on timeout
+        result = await asyncio.wait_for(
+            _validate_input_impl(text),
+            timeout=timeout_seconds
         )
+        return result
         
-        logger.debug(f"Validator response: {response.content[:200]}...")
-        
-        # Try to parse JSON response
-        try:
-            result = json.loads(response.content)
-            if "allowed" in result:
-                logger.info(f"Validation result: allowed={result.get('allowed')}, category={result.get('category')}")
-                return result
-        except json.JSONDecodeError:
-            pass
-        
-        # Try to extract JSON from markdown code block
-        json_match = re.search(r'```json?\s*(.*?)\s*```', response.content, re.DOTALL)
-        if json_match:
-            try:
-                result = json.loads(json_match.group(1))
-                if "allowed" in result:
-                    logger.info(f"Validation result (from markdown): allowed={result.get('allowed')}")
-                    return result
-            except json.JSONDecodeError:
-                pass
-        
-        # FAIL CLOSED - deny on parse failure for security
-        logger.error(f"Failed to parse validation response: {response.content[:100]}")
+    except asyncio.TimeoutError:
+        logger.error(f"Validation timeout after {timeout_seconds}s - failing closed")
+        # FAIL CLOSED - deny on timeout for security
         return {
             "allowed": False,
-            "reason": "Parse failure - denied for safety",
-            "category": "invalid",
+            "reason": f"Validation timeout ({timeout_seconds}s) - denied for safety",
+            "category": "error",
             "confidence": 0.0,
-            "parse_error": True
+            "timeout": True
         }
         
     except Exception as e:
@@ -191,12 +219,74 @@ async def validate_input(text: str) -> dict:
         }
 
 
-async def validate_output(text: str) -> dict:
+
+async def _validate_output_impl(text: str) -> dict:
     """
-    Validate agent output using Google ADK + LiteLLM + OpenRouter.
+    Internal implementation of output validation (without timeout wrapper).
+    """
+    # Create runner and session
+    runner = Runner()
+    session = InMemorySessionService()
+    
+    # Modified prompt for output validation
+    prompt = f"""Validate this AI-generated output for safety before showing to user:
+
+{text}
+
+Check for:
+- Leaked PII (emails, API keys, passwords)
+- Instruction leakage (system prompts visible)
+- Harmful content
+- Jailbreak artifacts
+
+Respond with JSON in the same format as input validation."""
+    
+    response = await runner.run(
+        agent=scope_validator,
+        user_message=prompt,
+        session_service=session,
+    )
+    
+    logger.debug(f"Output validator response: {response.content[:200]}...")
+    
+    # Try to parse JSON response
+    try:
+        result = json.loads(response.content)
+        if "allowed" in result:
+            logger.info(f"Output validation result: allowed={result.get('allowed')}")
+            return result
+    except json.JSONDecodeError:
+        pass
+    
+    # Try to extract JSON from markdown code block
+    json_match = re.search(r'```json?\s*(.*?)\s*```', response.content, re.DOTALL)
+    if json_match:
+        try:
+            result = json.loads(json_match.group(1))
+            if "allowed" in result:
+                logger.info(f"Output validation result (from markdown): allowed={result.get('allowed')}")
+                return result
+        except json.JSONDecodeError:
+            pass
+    
+    # FAIL CLOSED - deny on parse failure
+    logger.error(f"Failed to parse output validation response")
+    return {
+        "allowed": False,
+        "reason": "Parse failure - denied for safety",
+        "category": "invalid",
+        "confidence": 0.0,
+        "parse_error": True
+    }
+
+
+async def validate_output(text: str, timeout_seconds: int = 30) -> dict:
+    """
+    Validate agent output using Google ADK + LiteLLM + OpenRouter with timeout protection.
     
     Args:
         text: Agent output to validate
+        timeout_seconds: Maximum time to wait for validation (default: 30s)
         
     Returns:
         Validation result with fail-closed security pattern
@@ -210,50 +300,29 @@ async def validate_output(text: str) -> dict:
         }
     
     try:
-        logger.info("Validating output with ADK+LiteLLM...")
+        logger.info(f"Validating output with ADK+LiteLLM (timeout={timeout_seconds}s)...")
         
-        # Create runner and session
-        runner = Runner()
-        session = InMemorySessionService()
-        
-        # Use same validator agent with modified prompt
-        response = await runner.run(
-            agent=scope_validator,
-            user_message=f"Validate this agent output for safety and appropriateness:\n\n{text}",
-            session_service=session,
+        # Wrap in timeout protection - fail closed on timeout
+        result = await asyncio.wait_for(
+            _validate_output_impl(text),
+            timeout=timeout_seconds
         )
+        return result
         
-        # Parse response (same logic as validate_input)
-        try:
-            result = json.loads(response.content)
-            if "allowed" in result:
-                return result
-        except json.JSONDecodeError:
-            pass
-        
-        # Try markdown extraction
-        json_match = re.search(r'```json?\s*(.*?)\s*```', response.content, re.DOTALL)
-        if json_match:
-            try:
-                result = json.loads(json_match.group(1))
-                if "allowed" in result:
-                    return result
-            except json.JSONDecodeError:
-                pass
-        
-        # FAIL CLOSED
-        logger.error(f"Failed to parse output validation response")
+    except asyncio.TimeoutError:
+        logger.error(f"Output validation timeout after {timeout_seconds}s - failing closed")
+        # FAIL CLOSED - deny on timeout for security
         return {
             "allowed": False,
-            "reason": "Parse failure - denied for safety",
-            "category": "invalid",
+            "reason": f"Output validation timeout ({timeout_seconds}s) - denied for safety",
+            "category": "error",
             "confidence": 0.0,
-            "parse_error": True
+            "timeout": True
         }
         
     except Exception as e:
         logger.error(f"Output validation error: {e}", exc_info=True)
-        # FAIL CLOSED
+        # FAIL CLOSED - deny on any error
         return {
             "allowed": False,
             "reason": f"Validation failed: {str(e)}",
