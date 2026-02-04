@@ -11,6 +11,8 @@ Responsibilities:
 - Context formatting for target LLMs
 """
 
+
+import asyncio
 import json
 import re
 import logging
@@ -19,7 +21,8 @@ from typing import Optional, List
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+
+from backend.agents.session_manager import get_session_service
 
 from backend.config import get_settings
 
@@ -205,9 +208,9 @@ async def _process_context_impl(
     """
     Internal implementation of context processing (without timeout wrapper).
     """
-    # ADK agent processing
+    # ADK agent processing with shared session service
     runner = Runner()
-    session = InMemorySessionService()
+    session = get_session_service()  # Singleton - prevents memory leaks
     
     prompt = f"""{CONTEXT_PROCESSOR_INSTRUCTION}
 

@@ -19,7 +19,8 @@ from typing import Optional
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+
+from backend.agents.session_manager import get_session_service
 
 from backend.config import get_settings
 
@@ -117,9 +118,9 @@ async def _validate_input_impl(text: str) -> dict:
     This function does the actual validation work and is wrapped by
     validate_input() which adds timeout protection.
     """
-    # Create runner and session
+    # Create runner and get shared session service
     runner = Runner()
-    session = InMemorySessionService()
+    session = get_session_service()  # Singleton - prevents memory leaks
     
     # Execute agent
     response = await runner.run(
@@ -224,9 +225,9 @@ async def _validate_output_impl(text: str) -> dict:
     """
     Internal implementation of output validation (without timeout wrapper).
     """
-    # Create runner and session
+    # Create runner and get shared session service
     runner = Runner()
-    session = InMemorySessionService()
+    session = get_session_service()  # Singleton - prevents memory leaks
     
     # Modified prompt for output validation
     prompt = f"""Validate this AI-generated output for safety before showing to user:
