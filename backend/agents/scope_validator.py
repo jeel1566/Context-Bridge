@@ -21,6 +21,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 
 from backend.agents.session_manager import get_session_service
+from backend.services.pii_detector import get_pii_detector
 
 from backend.config import get_settings
 
@@ -224,7 +225,23 @@ async def validate_input(text: str, timeout_seconds: int = 30) -> dict:
 async def _validate_output_impl(text: str) -> dict:
     """
     Internal implementation of output validation (without timeout wrapper).
+    Includes output guardrails for PII leakage (Issue #13).
     """
+    # GUARDRAIL: Scan output for PII leakage (Issue #13)
+    pii_detector = get_pii_detector()
+    output_pii = pii_detector.detect(text)
+    
+    if output_pii:
+        logger.warning(f"Output contains PII! Types: {[p['type'] for p in output_pii]}")
+        return {
+            "allowed": False,
+            "reason": f"Output contains PII: {', '.join(set(p['type'] for p in output_pii))}",
+            "category": "pii_leak",
+            "confidence": 1.0,
+            "pii_found": output_pii,
+            "guardrail": "pii_detection"
+        }
+    
     # Create runner and get shared session service
     runner = Runner()
     session = get_session_service()  # Singleton - prevents memory leaks

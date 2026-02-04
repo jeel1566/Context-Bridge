@@ -117,6 +117,29 @@ INJECTION_PATTERNS = {
         "confidence": "high",
         "threat_level": "high"
     },
+    
+    # Additional attack types (Issue #12)
+    "sql_injection": {
+        "patterns": [
+            r"(?i)\b(?:union|select|insert|update|delete|drop)\s+.+\s+(?:from|into|table|where)",
+            r"';?\s*(?:--|#|/\*)",
+            r"\bor\s+1\s*=\s*1\b",
+            r"\band\s+1\s*=\s*0\b",
+        ],
+        "confidence": "medium",
+        "threat_level": "high"
+    },
+    
+    "xss_attempt": {
+        "patterns": [
+            r"<script[^>]*>",
+            r"javascript\s*:",
+            r"on(?:load|error|click|mouse\w+)\s*=",
+            r"<iframe[^>]*>",
+        ],
+        "confidence": "medium",
+        "threat_level": "medium"
+    },
 }
 
 
