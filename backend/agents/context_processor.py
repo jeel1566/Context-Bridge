@@ -26,6 +26,7 @@ from backend.agents.session_manager import get_session_service
 from backend.services.pii_detector import get_pii_detector
 from backend.services.injection_detector import get_injection_detector
 from backend.services.personality_profiles import get_personality_service
+from backend.services.resilience import retry_llm_call
 
 from backend.config import get_settings
 
@@ -166,11 +167,16 @@ SETTINGS:
 
 Please sanitize, check for injection, and format appropriately according to the personality profile."""
     
-    response = await runner.run(
-        agent=context_processor,
-        user_message=prompt,
-        session_service=session,
-    )
+    # Define the LLM call function for retry wrapper
+    async def make_llm_call():
+        return await runner.run(
+            agent=context_processor,
+            user_message=prompt,
+            session_service=session,
+        )
+    
+    # Execute with retry logic (Issue #7)
+    response = await retry_llm_call(make_llm_call)
     
     logger.debug(f"Processing response: {response.content[:200]}...")
     
