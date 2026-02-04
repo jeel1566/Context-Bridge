@@ -195,34 +195,21 @@ context_processor = LlmAgent(
 )
 
 
-async def process_context(
+
+async def _process_context_impl(
     text: str,
-    personality: str = "senior-dev",
-    target_llm: str = "chatgpt"
+    personality: str,
+    target_llm: str,
+    pre_sanitized: str
 ) -> dict:
     """
-    Main processing function for context using Google ADK + LiteLLM + OpenRouter.
-    
-    Args:
-        text: The context text to process
-        personality: Personality profile to apply
-        target_llm: Target LLM for formatting
-        
-    Returns:
-        Processed context dictionary with sanitized text and metadata
+    Internal implementation of context processing (without timeout wrapper).
     """
-    # Step 1: Quick PII scan and redaction (saves tokens)
-    quick_pii = quick_pii_scan(text)
-    pre_sanitized = quick_redact(text) if quick_pii else text
+    # ADK agent processing
+    runner = Runner()
+    session = InMemorySessionService()
     
-    try:
-        logger.info(f"Processing context with ADK+LiteLLM (personality={personality}, target={target_llm})...")
-        
-        # Step 2: ADK agent processing
-        runner = Runner()
-        session = InMemorySessionService()
-        
-        prompt = f"""{CONTEXT_PROCESSOR_INSTRUCTION}
+    prompt = f"""{CONTEXT_PROCESSOR_INSTRUCTION}
 
 Process this context for Context Bridge:
 
@@ -234,60 +221,100 @@ SETTINGS:
 - Target LLM: {target_llm}
 
 Please sanitize, check for injection, and format appropriately."""
-        
-        response = await runner.run(
-            agent=context_processor,
-            user_message=prompt,
-            session_service=session,
-        )
-        
-        logger.debug(f"Processing response: {response.content[:200]}...")
-        
-        # Try to parse JSON response
+    
+    response = await runner.run(
+        agent=context_processor,
+        user_message=prompt,
+        session_service=session,
+    )
+    
+    logger.debug(f"Processing response: {response.content[:200]}...")
+    
+    # Try to parse JSON response
+    try:
+        result = json.loads(response.content)
+        return result
+    except json.JSONDecodeError:
+        pass
+    
+    # Try markdown extraction
+    json_match = re.search(r'```json?\s*(.*?)\s*```', response.content, re.DOTALL)
+    if json_match:
         try:
-            result = json.loads(response.content)
-            # Merge quick scan results
-            if quick_pii:
-                result["pii_found"] = quick_pii + result.get("pii_found", [])
-            logger.info(f"Processing complete: pii_found={len(result.get('pii_found', []))}, injection={result.get('injection_detected')}")
+            result = json.loads(json_match.group(1))
             return result
         except json.JSONDecodeError:
             pass
+    
+    # Fallback: return error
+    logger.error("Failed to parse processing response")
+    return {
+        "error": "Parse failure",
+        "raw_response": response.content[:500]
+    }
+
+
+async def process_context(
+    text: str,
+    personality: str = "senior-dev",
+    target_llm: str = "chatgpt",
+    timeout_seconds: int = 30
+) -> dict:
+    """
+    Main processing function for context using Google ADK + LiteLLM + OpenRouter with timeout protection.
+    
+    Args:
+        text: The context text to process
+        personality: Personality profile to apply
+        target_llm: Target LLM for formatting
+        timeout_seconds: Maximum time to wait for processing (default: 30s)
         
-        # Try to extract JSON from markdown
-        json_match = re.search(r'```json?\s*(.*?)\s*```', response.content, re.DOTALL)
-        if json_match:
-            try:
-                result = json.loads(json_match.group(1))
-                if quick_pii:
-                    result["pii_found"] = quick_pii + result.get("pii_found", [])
-                return result
-            except json.JSONDecodeError:
-                pass
+    Returns:
+        Processed context dictionary with sanitized text and metadata
+    """
+    #Step 1: Quick PII scan and redaction (saves tokens)
+    quick_pii = quick_pii_scan(text)
+    pre_sanitized = quick_redact(text) if quick_pii else text
+    
+    try:
+        logger.info(f"Processing context with ADK+LiteLLM (timeout={timeout_seconds}s, personality={personality}, target={target_llm})...")
         
-        # Fallback: return pre-sanitized text
-        logger.warning("Failed to parse processing response, using fallback")
+        # Wrap in timeout protection
+        result = await asyncio.wait_for(
+            _process_context_impl(text, personality, target_llm, pre_sanitized),
+            timeout=timeout_seconds
+        )
+        
+        # Merge quick PII scan results if available
+        if quick_pii and isinstance(result, dict):
+            result["pii_found"] = quick_pii + result.get("pii_found", [])
+        
+        logger.info(f"Processing complete: pii_found={len(result.get('pii_found', []) if isinstance(result, dict) else [])}, injection={result.get('injection_detected') if isinstance(result, dict) else False}")
+        return result
+        
+    except asyncio.TimeoutError:
+        logger.error(f"Context processing timeout after {timeout_seconds}s")
+        # Return error result on timeout
         return {
+            "error": f"Processing timeout ({timeout_seconds}s)",
+            "sanitized_text": pre_sanitized,  # At least return pre-sanitized
+            "pii_found": quick_pii,
+            "injection_detected": False,
+            "personality_applied": personality,
+            "target_llm": target_llm,
+            "timeout": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Processing error: {e}", exc_info=True)
+        # Fallback on error
+        return {
+            "error": str(e),
             "sanitized_text": pre_sanitized,
             "pii_found": quick_pii,
             "injection_detected": False,
             "personality_applied": personality,
             "target_llm": target_llm,
-            "token_estimate": len(pre_sanitized.split()),
-            "safety_wrapped": False,
             "parse_fallback": True
         }
-        
-    except Exception as e:
-        logger.error(f"Context processing error: {e}", exc_info=True)
-        # Return safe fallback
-        return {
-            "sanitized_text": quick_redact(text),
-            "pii_found": quick_pii_scan(text),
-            "injection_detected": False,
-            "personality_applied": personality,
-            "target_llm": target_llm,
-            "token_estimate": len(text.split()),
-            "safety_wrapped": False,
-            "error": str(e)
-        }
+```
