@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Context Bridge</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Preconnect for fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header glass">
+            <div class="logo">
+                <span class="logo-icon">🌉</span>
+                <h1>Context Bridge</h1>
+            </div>
+            <div class="header-actions">
+                <button id="theme-toggle" class="btn btn-ghost btn-icon" title="Toggle theme">
+                    <span class="icon-sun">☀️</span>
+                    <span class="icon-moon">🌙</span>
+                </button>
+                <div id="auth-status" class="auth-status">
+                    <button id="login-btn" class="btn btn-primary btn-sm">Login</button>
+                    <div id="user-info" class="user-info hidden flex items-center" style="cursor: pointer;">
+                        <img id="user-avatar" class="avatar" src="" alt="User"
+                            style="width: 2rem; height: 2rem; border-radius: 50%;">
+                        <span id="user-name" class="text-sm font-medium ml-2"></span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Sync Status Bar -->
+        <section id="sync-panel">
+            <div class="flex items-center">
+                <span id="sync-indicator" class="sync-indicator"></span>
+                <span id="sync-text" class="text-xs text-muted">Synced</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <select id="personality-selector"
+                    class="text-xs border-0 bg-transparent text-muted focus:text-foreground">
+                    <option value="senior-dev">Senior Dev</option>
+                    <option value="architect">Architect</option>
+                    <option value="teacher">Teacher</option>
+                    <option value="researcher">Researcher</option>
+                </select>
+                <button id="sync-btn" class="btn btn-ghost btn-icon" style="width: 1.5rem; height: 1.5rem;"
+                    title="Sync Now">🔄</button>
+            </div>
+        </section>
+
+        <!-- Main Content (Scrollable list) -->
+        <main class="main">
+            <div id="memories-list" class="memories-list">
+                <!-- Memories will be injected here -->
+                <div class="flex flex-col items-center justify-center h-full text-center p-4 text-muted pt-10">
+                    <div style="font-size: 3rem; opacity: 0.3; margin-bottom: 1rem;">🧠</div>
+                    <p>No memories yet.</p>
+                    <p class="text-xs mt-2">Open ChatGPT, Claude, or Gemini and capture context to get started.</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Bottom Actions (Glass Panel) -->
+        <div class="bottom-panel glass">
+            <section id="capture-panel">
+                <button id="capture-btn" class="btn btn-primary">
+                    ✨ Capture Context
+                </button>
+                <div class="flex justify-between items-center mt-2 px-1">
+                    <p class="text-xs text-muted">Supports ChatGPT, Claude, Gemini</p>
+                    <button id="add-memory-btn" class="btn btn-ghost btn-sm text-xs" title="Add Manually">Manual
+                        +</button>
+                </div>
+            </section>
+        </div>
+
+        <!-- Editor Overlay -->
+        <section id="memory-editor" class="overlay-panel hidden">
+            <div class="flex justify-between items-center mb-6">
+                <h2 id="editor-title">New Memory</h2>
+                <button id="cancel-btn" class="btn btn-ghost">✕</button>
+            </div>
+
+            <form id="memory-form" class="flex flex-col h-full">
+                <div class="form-group">
+                    <label for="memory-title">Title</label>
+                    <input type="text" id="memory-title" placeholder="Summary of conversation..." required>
+                </div>
+                <div class="form-group flex-1 flex flex-col">
+                    <label for="memory-content">Content</label>
+                    <textarea id="memory-content" class="flex-1" style="min-height: 200px; resize: none;"
+                        required></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="memory-tags">Tags</label>
+                    <input type="text" id="memory-tags" placeholder="react, debug, architecture">
+                </div>
+                <div class="form-actions mt-4">
+                    <button type="submit" class="btn btn-primary w-full">Save Memory</button>
+                </div>
+            </form>
+        </section>
+
+        <!-- Share Overlay -->
+        <section id="share-panel" class="overlay-panel hidden">
+            <div class="flex justify-between items-center mb-6">
+                <h2>Share Memory</h2>
+                <button id="close-share-btn" class="btn btn-ghost">✕</button>
+            </div>
+
+            <div class="form-group">
+                <label for="share-link">Share Link</label>
+                <div class="flex gap-2">
+                    <input type="text" id="share-link" readonly>
+                    <button id="copy-link-btn" class="btn btn-secondary">Copy</button>
+                </div>
+            </div>
+
+            <div class="relative my-6">
+                <div class="absolute inset-0 flex items-center">
+                    <span class="w-full border-t border-border"></span>
+                </div>
+                <div class="relative flex justify-center text-xs uppercase">
+                    <span class="bg-background px-2 text-muted-foreground">Or invite via email</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="invite-email">Email Address</label>
+                <div class="flex gap-2">
+                    <input type="email" id="invite-email" placeholder="colleague@example.com">
+                    <button id="invite-btn" class="btn btn-primary">Invite</button>
+                </div>
+            </div>
+        </section>
+
+    </div>
+
+    <script src="index.js" type="module"></script>
+</body>
+
+</html>

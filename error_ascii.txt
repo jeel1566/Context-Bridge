@@ -1,0 +1,14 @@
+======================================================================
+Testing LiteLlm creation
+======================================================================
+
+[1] Environment variables:
+  OPENROUTER_API_KEY: sk-or-v1-c1d76f10714...
+  OPENROUTER_MODEL: openai/gpt-oss-120b
+
+[2] Importing LiteLlm...
+  Import successful
+
+[3] Creating model...
+  Model name: openrouter/openai/gpt-oss-120b
+  SUCCESS! Model created: <class 'google.adk.models.lite_llm.LiteLlm'>

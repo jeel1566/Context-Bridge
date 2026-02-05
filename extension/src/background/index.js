@@ -4,9 +4,11 @@
  * Handles:
  * - Side panel activation
  * - API communication with backend
- * - Authentication state management
+ * - Authentication state management via Supabase
  * - Message passing between content scripts and side panel
  */
+
+import supabaseAuth from '../lib/supabase.js';
 
 //const API_BASE_URL = 'https://context-bridge.azurewebsites.net/api';
 const API_BASE_URL = 'https://context-bridge-api-dxfhdzabfqgrdhc2.eastus-01.azurewebsites.net/api';
@@ -20,27 +22,40 @@ chrome.sidePanel
   .catch((error) => console.error('Side panel error:', error));
 
 // ============================================
-// Authentication
+// Authentication (Supabase)
 // ============================================
 
-let authToken = null;
+// Initialize auth on service worker start
+supabaseAuth.initialize().then(session => {
+  if (session) {
+    console.log('Auth initialized with existing session');
+  } else {
+    console.log('No existing auth session');
+  }
+}).catch(console.error);
+
+// Listen for auth state changes and notify UI
+supabaseAuth.onAuthStateChange((event, session) => {
+  console.log('Auth state changed:', event);
+  // Broadcast to any open side panels
+  chrome.runtime.sendMessage({
+    type: 'AUTH_STATE_CHANGED',
+    event,
+    session: session ? {
+      user: session.user,
+      isAuthenticated: true
+    } : null
+  }).catch(() => {
+    // Side panel might not be open
+  });
+});
 
 async function getAuthToken() {
-  if (authToken) return authToken;
-
-  const result = await chrome.storage.local.get(['accessToken']);
-  authToken = result.accessToken;
-  return authToken;
-}
-
-async function setAuthToken(token) {
-  authToken = token;
-  await chrome.storage.local.set({ accessToken: token });
+  return supabaseAuth.getAccessToken();
 }
 
 async function clearAuthToken() {
-  authToken = null;
-  await chrome.storage.local.remove(['accessToken', 'refreshToken', 'user']);
+  await supabaseAuth.signOut();
 }
 
 // ============================================
@@ -65,42 +80,22 @@ async function apiRequest(endpoint, options = {}) {
   });
 
   if (response.status === 401) {
-    // Token expired - try to refresh
-    const refreshed = await refreshAccessToken();
-    if (refreshed) {
-      // Retry the request
-      headers['Authorization'] = `Bearer ${await getAuthToken()}`;
-      return fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
-    } else {
+    // Token expired - try to refresh via Supabase
+    try {
+      await supabaseAuth.refreshSession();
+      const newToken = await getAuthToken();
+      if (newToken) {
+        headers['Authorization'] = `Bearer ${newToken}`;
+        return fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
+      }
+    } catch (error) {
+      console.error('Token refresh failed:', error);
       await clearAuthToken();
       throw new Error('Authentication required');
     }
   }
 
   return response;
-}
-
-async function refreshAccessToken() {
-  try {
-    const result = await chrome.storage.local.get(['refreshToken']);
-    if (!result.refreshToken) return false;
-
-    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: result.refreshToken }),
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      await setAuthToken(data.data.access_token);
-      return true;
-    }
-    return false;
-  } catch (error) {
-    console.error('Token refresh failed:', error);
-    return false;
-  }
 }
 
 // ============================================
@@ -199,52 +194,39 @@ async function syncMemories(syncData) {
 }
 
 // ============================================
-// Authentication
+// Authentication (Supabase OAuth)
 // ============================================
 
 async function getAuthStatus() {
-  const result = await chrome.storage.local.get(['user', 'accessToken']);
+  const session = await supabaseAuth.getSession();
   return {
-    isAuthenticated: !!result.accessToken,
-    user: result.user || null,
+    isAuthenticated: !!session?.access_token,
+    user: session?.user || null,
   };
 }
 
 async function loginWithGoogle() {
   try {
-    // Use Chrome Identity API for OAuth
-    const authUrl = await chrome.identity.getAuthToken({
-      interactive: true,
-      scopes: ['openid', 'email', 'profile']
-    });
+    const result = await supabaseAuth.signInWithGoogle();
 
-    if (!authUrl) {
-      throw new Error('Authentication cancelled');
+    if (result.session) {
+      // Optionally sync user with backend (create/update user in Cosmos DB)
+      try {
+        await apiRequest('/auth/user', {
+          method: 'POST',
+          body: JSON.stringify({
+            // Backend will extract user info from JWT
+          })
+        });
+      } catch (error) {
+        // Non-critical - user record will be created on first API call
+        console.warn('User sync optional, continuing:', error);
+      }
+
+      return { success: true, user: result.user };
     }
 
-    // Exchange the token with our backend
-    const response = await fetch(`${API_BASE_URL}/auth/google`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken: authUrl }),
-    });
-
-    if (!response.ok) {
-      throw new Error('Authentication failed');
-    }
-
-    const data = await response.json();
-
-    // Store tokens
-    await chrome.storage.local.set({
-      accessToken: data.data.access_token,
-      refreshToken: data.data.refresh_token,
-      user: data.data.user,
-    });
-
-    authToken = data.data.access_token;
-
-    return { success: true, user: data.data.user };
+    throw new Error('Authentication failed');
   } catch (error) {
     console.error('Login failed:', error);
     throw error;
@@ -341,4 +323,4 @@ async function handleCapturedContext(contextData, tab) {
 // Initialization
 // ============================================
 
-console.log('Context Bridge background service worker initialized');
+console.log('Context Bridge background service worker initialized with Supabase auth');

@@ -1,5 +1,7 @@
 /**
  * Context Bridge - Side Panel JavaScript
+ * 
+ * Updated for Supabase Authentication
  */
 
 // ============================================
@@ -94,7 +96,7 @@ async function sendMessage(type, data = {}) {
 }
 
 // ============================================
-// Authentication
+// Authentication (Supabase)
 // ============================================
 
 async function checkAuthStatus() {
@@ -112,8 +114,17 @@ function updateAuthUI(status) {
     if (status.isAuthenticated && status.user) {
         elements.loginBtn.classList.add('hidden');
         elements.userInfo.classList.remove('hidden');
-        elements.userAvatar.src = status.user.picture || '';
-        elements.userName.textContent = status.user.name || status.user.email;
+
+        // User info from Supabase - use avatar_url or picture
+        const avatarUrl = status.user.user_metadata?.avatar_url ||
+            status.user.user_metadata?.picture ||
+            '';
+        const userName = status.user.user_metadata?.full_name ||
+            status.user.user_metadata?.name ||
+            status.user.email;
+
+        elements.userAvatar.src = avatarUrl;
+        elements.userName.textContent = userName;
     } else {
         elements.loginBtn.classList.remove('hidden');
         elements.userInfo.classList.add('hidden');
@@ -130,15 +141,48 @@ async function handleLogin() {
         if (result.success) {
             updateAuthUI({ isAuthenticated: true, user: result.user });
             await loadMemories();
+        } else if (result.error) {
+            throw new Error(result.error);
         }
     } catch (error) {
         console.error('Login failed:', error);
-        alert('Login failed. Please try again.');
+        alert('Login failed: ' + (error.message || 'Please try again.'));
     } finally {
         elements.loginBtn.disabled = false;
         elements.loginBtn.textContent = 'Login';
     }
 }
+
+async function handleLogout() {
+    try {
+        await sendMessage('LOGOUT');
+        updateAuthUI({ isAuthenticated: false, user: null });
+        memories = [];
+        renderMemories();
+    } catch (error) {
+        console.error('Logout failed:', error);
+    }
+}
+
+// Listen for auth state changes from background
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'AUTH_STATE_CHANGED') {
+        if (message.event === 'SIGNED_IN' && message.session) {
+            updateAuthUI({ isAuthenticated: true, user: message.session.user });
+            loadMemories();
+        } else if (message.event === 'SIGNED_OUT') {
+            updateAuthUI({ isAuthenticated: false, user: null });
+            memories = [];
+            renderMemories();
+        }
+    } else if (message.type === 'NEW_CONTEXT_AVAILABLE') {
+        showEditor({
+            title: message.data.title || 'Captured Context',
+            content: message.data.content,
+            tags: message.data.tags || [],
+        });
+    }
+});
 
 // ============================================
 // Memories
@@ -158,7 +202,11 @@ async function loadMemories() {
 function renderMemories() {
     if (!memories.length) {
         elements.memoriesList.innerHTML = `
-      <p class="empty-state">No memories yet. Capture your first context!</p>
+        <div class="flex flex-col items-center justify-center h-full text-center p-4 text-muted pt-10">
+            <div style="font-size: 3rem; opacity: 0.3; margin-bottom: 1rem;">🧠</div>
+            <p>No memories yet.</p>
+            <p class="text-xs mt-2">Open ChatGPT, Claude, or Gemini and capture context to get started.</p>
+        </div>
     `;
         return;
     }
@@ -443,20 +491,6 @@ async function setLastSyncTime(time) {
 }
 
 // ============================================
-// Message Listener
-// ============================================
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'NEW_CONTEXT_AVAILABLE') {
-        showEditor({
-            title: message.data.title || 'Captured Context',
-            content: message.data.content,
-            tags: message.data.tags || [],
-        });
-    }
-});
-
-// ============================================
 // Event Listeners
 // ============================================
 
@@ -471,6 +505,13 @@ elements.personalitySelector?.addEventListener('change', handlePersonalityChange
 elements.closeShareBtn?.addEventListener('click', closeSharePanel);
 elements.copyLinkBtn?.addEventListener('click', copyShareLink);
 elements.inviteBtn?.addEventListener('click', sendInvite);
+
+// Add logout handler to user info area (click on user avatar to logout)
+elements.userInfo?.addEventListener('click', () => {
+    if (confirm('Do you want to sign out?')) {
+        handleLogout();
+    }
+});
 
 // ============================================
 // Initialization
