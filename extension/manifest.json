@@ -15,7 +15,8 @@
         "https://chatgpt.com/*",
         "https://claude.ai/*",
         "https://gemini.google.com/*",
-        "https://*.anthropic.com/*"
+        "https://*.anthropic.com/*",
+        "https://czmpxzvcbwyxjhwrlgri.supabase.co/*"
     ],
     "background": {
         "service_worker": "src/background/index.js",
