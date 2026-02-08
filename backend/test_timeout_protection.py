@@ -78,7 +78,7 @@ async def test_context_processing_has_timeout():
             await asyncio.sleep(100)
             return AsyncMock(content='{}')
         
-       mock_agent.return_value = hanging_response()
+        mock_agent.return_value = hanging_response()
         
         result = await process_context("test context", personality="quick-answer")
         
