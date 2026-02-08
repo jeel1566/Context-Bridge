@@ -18,6 +18,8 @@ import re
 import logging
 from typing import Optional, List
 
+import uuid
+from google.genai import types
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
@@ -146,8 +148,15 @@ async def _process_context_impl(
     Internal implementation of context processing (without timeout wrapper).
     """
     # ADK agent processing with shared session service
-    runner = Runner()
-    session = get_session_service()  # Singleton - prevents memory leaks
+    # Get shared session service
+    session = get_session_service()
+    
+    # Initialize Runner
+    runner = Runner(
+        agent=context_processor,
+        session_service=session,
+        app_name="context-bridge"
+    )
     
     # Get personality profile instructions
     personality_service = get_personality_service()
@@ -169,11 +178,31 @@ Please sanitize, check for injection, and format appropriately according to the 
     
     # Define the LLM call function for retry wrapper
     async def make_llm_call():
-        return await runner.run(
-            agent=context_processor,
-            user_message=prompt,
-            session_service=session,
+        # Generate session ID 
+        session_id = str(uuid.uuid4())
+        user_id = "user"
+        
+        user_msg = types.Content(
+            role="user",
+            parts=[types.Part(text=prompt)]
         )
+        
+        full_response_text = ""
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=user_msg,
+        ):
+             if event.author == "model" and event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        full_response_text += part.text
+        
+        class MockResponse:
+            def __init__(self, content):
+                self.content = content
+        
+        return MockResponse(full_response_text)
     
     # Execute with retry logic (Issue #7)
     response = await retry_llm_call(make_llm_call)

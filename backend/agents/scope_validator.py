@@ -16,6 +16,8 @@ import re
 import logging
 from typing import Optional
 
+import uuid
+from google.genai import types
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
@@ -120,15 +122,42 @@ async def _validate_input_impl(text: str) -> dict:
     validate_input() which adds timeout protection.
     """
     # Create runner and get shared session service
-    runner = Runner()
-    session = get_session_service()  # Singleton - prevents memory leaks
+    # Create runner and get shared session service
+    session = get_session_service()
     
-    # Execute agent
-    response = await runner.run(
+    runner = Runner(
         agent=scope_validator,
-        user_message=f"Validate this input:\n\n{text}",
         session_service=session,
+        app_name="context-bridge"
     )
+    
+    # Prepare input message
+    user_msg = types.Content(
+        role="user",
+        parts=[types.Part(text=f"Validate this input:\n\n{text}")]
+    )
+    
+    # Generate session ID for this request
+    session_id = str(uuid.uuid4())
+    user_id = "user"
+    
+    # Execute agent and collect response
+    full_response_text = ""
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=user_msg,
+    ):
+        if event.author == "model" and event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.text:
+                    full_response_text += part.text
+    
+    class MockResponse:
+        def __init__(self, content):
+            self.content = content
+            
+    response = MockResponse(full_response_text)
     
     logger.debug(f"Validator response: {response.content[:200]}...")
     
@@ -243,8 +272,14 @@ async def _validate_output_impl(text: str) -> dict:
         }
     
     # Create runner and get shared session service
-    runner = Runner()
-    session = get_session_service()  # Singleton - prevents memory leaks
+    # Create runner and get shared session service
+    session = get_session_service()
+    
+    runner = Runner(
+        agent=scope_validator,
+        session_service=session,
+        app_name="context-bridge"
+    )
     
     # Modified prompt for output validation
     prompt = f"""Validate this AI-generated output for safety before showing to user:
@@ -258,12 +293,34 @@ Check for:
 - Jailbreak artifacts
 
 Respond with JSON in the same format as input validation."""
-    
-    response = await runner.run(
-        agent=scope_validator,
-        user_message=prompt,
-        session_service=session,
+
+    # Prepare input message
+    user_msg = types.Content(
+        role="user",
+        parts=[types.Part(text=prompt)]
     )
+    
+    # Generate session ID for this request
+    session_id = str(uuid.uuid4())
+    user_id = "user"
+    
+    # Execute agent and collect response
+    full_response_text = ""
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=user_msg,
+    ):
+        if event.author == "model" and event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.text:
+                    full_response_text += part.text
+                    
+    class MockResponse:
+        def __init__(self, content):
+            self.content = content
+            
+    response = MockResponse(full_response_text)
     
     logger.debug(f"Output validator response: {response.content[:200]}...")
     
