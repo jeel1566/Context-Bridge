@@ -1,10 +1,12 @@
 """Test direct LiteLLM call to OpenRouter (bypass ADK)"""
 import os
-
-# Set environment
-os.environ['OPENROUTER_API_KEY'] = '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'
+import sys
 
 print("Testing LiteLLM → OpenRouter direct call...\n")
+
+if not os.environ.get('OPENROUTER_API_KEY'):
+    print("Skipping test: OPENROUTER_API_KEY not found in environment")
+    sys.exit(0)
 
 try:
     import litellm
@@ -14,7 +16,7 @@ try:
     response = litellm.completion(
         model="openrouter/openai/gpt-oss-120b",
         messages=[{"role": "user", "content": "Say 'LiteLLM works!' if you can read this"}],
-        api_key=os.environ['OPENROUTER_API_KEY']
+        api_key=os.environ.get('OPENROUTER_API_KEY')
     )
     
     print(f"✓ Response: {response.choices[0].message.content}")
@@ -26,7 +28,7 @@ try:
         response2 = litellm.completion(
             model="openrouter/gpt-oss-120b",
             messages=[{"role": "user", "content": "Test 2"}],
-            api_key=os.environ['OPENROUTER_API_KEY']
+            api_key=os.environ.get('OPENROUTER_API_KEY')
         )
         print(f"✓ Works without prefix: {response2.choices[0].message.content}")
     except Exception as e:

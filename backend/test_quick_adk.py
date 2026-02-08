@@ -3,8 +3,11 @@ import sys
 import os
 
 # Set environment
-os.environ['OPENROUTER_API_KEY'] = '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'
-os.environ['OPENROUTER_MODEL'] = 'openai/gpt-oss-120b'
+# os.environ['OPENROUTER_MODEL'] = 'openai/gpt-oss-120b'
+
+if not os.environ.get('OPENROUTER_API_KEY'):
+    print("Skipping test: OPENROUTER_API_KEY not found in environment")
+    sys.exit(0)
 
 try:
     from google.adk.models.lite_llm import LiteLlm
@@ -13,7 +16,7 @@ try:
     # Try to create a model
     model = LiteLlm(
         model="openrouter/openai/gpt-oss-120b",
-        api_key=os.environ['OPENROUTER_API_KEY']
+        api_key=os.environ.get('OPENROUTER_API_KEY')
     )
     print(f"✓ LiteLlm model created: {model}")
     
