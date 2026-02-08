@@ -128,7 +128,8 @@ async def _validate_input_impl(text: str) -> dict:
     runner = Runner(
         agent=scope_validator,
         session_service=session,
-        app_name="context-bridge"
+        app_name="context-bridge",
+        auto_create_session=True,
     )
     
     # Prepare input message
@@ -278,7 +279,8 @@ async def _validate_output_impl(text: str) -> dict:
     runner = Runner(
         agent=scope_validator,
         session_service=session,
-        app_name="context-bridge"
+        app_name="context-bridge",
+        auto_create_session=True,
     )
     
     # Modified prompt for output validation

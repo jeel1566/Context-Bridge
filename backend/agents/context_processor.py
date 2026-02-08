@@ -155,7 +155,8 @@ async def _process_context_impl(
     runner = Runner(
         agent=context_processor,
         session_service=session,
-        app_name="context-bridge"
+        app_name="context-bridge",
+        auto_create_session=True,
     )
     
     # Get personality profile instructions
