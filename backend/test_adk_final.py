@@ -25,7 +25,6 @@ try:
     agent = LlmAgent(
         model=model,
         name='test_agent',
-        identity="Test agent for integration testing",
         instruction="You are a test agent. Always output valid JSON with an 'allowed' field."
     )
     print(f"✓ Agent created: {agent.name}\n")

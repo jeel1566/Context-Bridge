@@ -21,7 +21,6 @@ try:
     agent = LlmAgent(
         model=model,
         name='test_agent',
-        identity="Test agent",
         instruction="You are a test agent"
     )
     print(f"SUCCESS! Agent created: {agent.name}", file=error_file, flush=True)

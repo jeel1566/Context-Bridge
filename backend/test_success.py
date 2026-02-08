@@ -17,7 +17,6 @@ try:
     agent = LlmAgent(
         model=model,
         name='test_agent',
-        identity="Test agent",
         instruction="You are a test agent"
     )
     print(f"[2] Agent created: {agent.name}")
