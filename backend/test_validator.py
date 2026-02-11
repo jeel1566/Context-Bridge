@@ -26,6 +26,7 @@ HAS_API_KEY = bool(os.environ.get("OPENROUTER_API_KEY"))
 
 pytestmark = [
     pytest.mark.asyncio,
+    pytest.mark.integration,
     pytest.mark.skipif(
         not HAS_DEPS,
         reason=f"Missing dependency: {_import_error if not HAS_DEPS else ''}"
