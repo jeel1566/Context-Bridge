@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         alias="OPENROUTER_API_KEY"
     )
     openrouter_model: str = Field(
-        default="openai/gpt-oss-120b:free",
+        default="deepseek/deepseek-r1-0528:free",
         alias="OPENROUTER_MODEL"
     )
     openrouter_base_url: str = Field(
