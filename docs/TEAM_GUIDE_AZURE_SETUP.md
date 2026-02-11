@@ -120,21 +120,34 @@ jobs:
 
 ---
 
-### Task 3: Get Publish Profile & Add Secret
+### Task 3: Create Service Principal & Add GitHub Secret
 
-1. **Get Publish Profile:**
+> **Note:** This replaces the old publish profile method with more secure Service Principal authentication.
+
+1. **Create Service Principal:**
    ```bash
-   az functionapp deployment list-publishing-profiles \
+   # Get Function App resource ID
+   FUNCTION_APP_ID=$(az functionapp show \
      --name context-bridge-api \
      --resource-group context-bridge-rg \
-     --xml
+     --query id --output tsv)
+   
+   # Create Service Principal
+   az ad sp create-for-rbac \
+     --name "context-bridge-github-actions" \
+     --role Contributor \
+     --scopes $FUNCTION_APP_ID \
+     --sdk-auth
    ```
 
 2. **Add to GitHub Secrets:**
    - Go to GitHub repo → Settings → Secrets and variables → Actions
    - Click "New repository secret"
-   - Name: `AZURE_FUNCTIONAPP_PUBLISH_PROFILE`
-   - Value: Paste the entire XML output
+   - Name: `AZURE_CREDENTIALS`
+   - Value: Paste the **entire JSON output** from the command above
+   - Click "Add secret"
+
+> ⚠️ **Save the output immediately!** The `clientSecret` is shown only once.
 
 ---
 
@@ -195,8 +208,8 @@ curl https://context-bridge-api.azurewebsites.net/api/memories
 - [ ] Cosmos DB created with containers (`memories`, `shared`)
 - [ ] Environment variables set in Azure Portal
 - [ ] GitHub Actions workflow created
-- [ ] Publish profile added as GitHub secret
-- [ ] Push to master triggers deployment
+- [ ] Service Principal created and `AZURE_CREDENTIALS` secret added to GitHub
+- [ ] Push to main triggers deployment
 - [ ] `/api/health` returns 200 OK
 - [ ] `/api/memories` returns 200 OK
 
@@ -226,8 +239,9 @@ pip install azure-functions
 - Verify firewall allows Azure services
 
 ### "GitHub Actions failing"
-- Check publish profile is correctly added as secret
-- Verify workflow YAML syntax
+- Check `AZURE_CREDENTIALS` secret is correctly added
+- Verify Service Principal has Contributor role on Function App
+- Ensure JSON format is valid (no extra spaces/newlines)
 
 ### "CORS errors from extension"
 ```bash
