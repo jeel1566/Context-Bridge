@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         alias="OPENROUTER_API_KEY"
     )
     openrouter_model: str = Field(
-        default="deepseek/deepseek-r1-0528:free",
+        default="openrouter/pony-alpha",
         alias="OPENROUTER_MODEL"
     )
     openrouter_base_url: str = Field(
