@@ -11,35 +11,44 @@ The agent pipeline follows the Sandbox pattern:
 Architecture: Google ADK → LiteLLM → OpenRouter (free tier)
 """
 
-from google.adk.agents import SequentialAgent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+try:
+    from google.adk.agents import SequentialAgent
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
 
-from .scope_validator import scope_validator, validate_input, validate_output
-from .context_processor import context_processor, process_context
+    from .scope_validator import scope_validator, validate_input, validate_output
+    from .context_processor import context_processor, process_context
 
+    # Create pipeline orchestrator
+    context_bridge_pipeline = SequentialAgent(
+        name="ContextBridgePipeline",
+        description="Processes user context through validation and processing stages.",
+        sub_agents=[
+            scope_validator,
+            context_processor,
+        ],
+    )
 
-# Create pipeline orchestrator
-context_bridge_pipeline = SequentialAgent(
-    name="ContextBridgePipeline",
-    description="Processes user context through validation and processing stages.",
-    sub_agents=[
-        scope_validator,
-        context_processor,
-    ],
-)
+    # Root agent for orchestration
+    root_agent = context_bridge_pipeline
 
-# Root agent for orchestration
-root_agent = context_bridge_pipeline
+    # Export both pipeline and individual functions
+    __all__ = [
+        'root_agent',
+        'context_bridge_pipeline',
+        'scope_validator',
+        'context_processor',
+        'validate_input',
+        'validate_output',
+        'process_context',
+    ]
 
-
-# Export both pipeline and individual functions
-__all__ = [
-    'root_agent',
-    'context_bridge_pipeline',
-    'scope_validator',
-    'context_processor',
-    'validate_input',
-    'validate_output',
-    'process_context',
-]
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).warning(
+        f"ADK agent pipeline not available (missing dependency): {e}"
+    )
+    # Provide stubs so other modules can still import from agents package
+    root_agent = None
+    context_bridge_pipeline = None
+    __all__ = ['root_agent', 'context_bridge_pipeline']

@@ -2,17 +2,41 @@
 Test ADK + LiteLLM integration with OpenRouter
 """
 import sys
+import os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import asyncio
 import logging
+import pytest
 
 # Enable logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-from backend.agents.scope_validator import validate_input, validate_output
-from backend.agents.context_processor import process_context
+# Skip if LiteLLM extensions are not available
+_import_error = ""
+try:
+    from backend.agents.scope_validator import validate_input, validate_output
+    from backend.agents.context_processor import process_context
+    HAS_DEPS = True
+except ImportError as e:
+    HAS_DEPS = False
+    _import_error = str(e)
+
+# Skip if no API key is configured
+HAS_API_KEY = bool(os.environ.get("OPENROUTER_API_KEY"))
+
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.skipif(
+        not HAS_DEPS,
+        reason=f"Missing dependency: {_import_error}"
+    ),
+    pytest.mark.skipif(
+        not HAS_API_KEY,
+        reason="OPENROUTER_API_KEY not set"
+    ),
+]
 
 
 async def test_integration():
