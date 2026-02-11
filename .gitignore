@@ -106,3 +106,5 @@ local.settings.json
 secrets/
 
 extension/package-lock.json
+
+.venv311/

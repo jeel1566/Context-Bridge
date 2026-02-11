@@ -7,13 +7,6 @@ import azure.functions as func
 import logging
 import json
 
-# Import function handlers
-from functions.sanitize import sanitize_handler
-from functions.curate import curate_handler
-from functions.memories import memories_handler
-from functions.share import share_handler
-from functions.auth import auth_handler
-
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 # ============================================
@@ -34,12 +27,28 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="sanitize", methods=["POST"])
 def sanitize(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/sanitize - Main Sandbox processing endpoint"""
-    return sanitize_handler(req)
+    try:
+        from functions.sanitize import sanitize_handler
+        return sanitize_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import sanitize_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 @app.route(route="curate", methods=["POST"])
 def curate(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/curate - Format context for target LLM"""
-    return curate_handler(req)
+    try:
+        from functions.curate import curate_handler
+        return curate_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import curate_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 # ============================================
 # Memory Bank CRUD
@@ -47,12 +56,28 @@ def curate(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="memories", methods=["GET", "POST"])
 async def memories(req: func.HttpRequest) -> func.HttpResponse:
     """GET/POST /api/memories"""
-    return await memories_handler(req)
+    try:
+        from functions.memories import memories_handler
+        return await memories_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import memories_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 @app.route(route="memories/{id}", methods=["GET", "PUT", "DELETE"])
 async def memory_by_id(req: func.HttpRequest) -> func.HttpResponse:
     """GET/PUT/DELETE /api/memories/:id"""
-    return await memories_handler(req)
+    try:
+        from functions.memories import memories_handler
+        return await memories_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import memories_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 # ============================================
 # Collaboration
@@ -60,12 +85,28 @@ async def memory_by_id(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="share", methods=["POST"])
 def share(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/share - Generate share link"""
-    return share_handler(req)
+    try:
+        from functions.share import share_handler
+        return share_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import share_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 @app.route(route="shared/{share_code}", methods=["GET"])
 def shared(req: func.HttpRequest) -> func.HttpResponse:
     """GET /api/shared/:shareCode - Access shared bank"""
-    return share_handler(req)
+    try:
+        from functions.share import share_handler
+        return share_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import share_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 # ============================================
 # Authentication
@@ -73,29 +114,67 @@ def shared(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="auth/google", methods=["POST"])
 def auth_google(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/auth/google - Verify Google ID token"""
-    return auth_handler(req)
+    try:
+        from functions.auth import auth_handler
+        return auth_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import auth_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 @app.route(route="auth/user", methods=["GET"])
 def auth_user(req: func.HttpRequest) -> func.HttpResponse:
     """GET /api/auth/user - Get current user info"""
-    return auth_handler(req)
+    try:
+        from functions.auth import auth_handler
+        return auth_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import auth_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 @app.route(route="auth/refresh", methods=["POST"])
 def auth_refresh(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/auth/refresh - Refresh access token"""
-    return auth_handler(req)
+    try:
+        from functions.auth import auth_handler
+        return auth_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import auth_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 # ============================================
 # Sync
 # ============================================
-from functions.sync import sync_handler
-
 @app.route(route="sync", methods=["POST"])
 def sync(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/sync - Sync memories across devices"""
-    return sync_handler(req)
+    try:
+        from functions.sync import sync_handler
+        return sync_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import sync_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
 
 @app.route(route="sync/status", methods=["GET"])
 def sync_status(req: func.HttpRequest) -> func.HttpResponse:
     """GET /api/sync/status - Get sync status"""
-    return sync_handler(req)
+    try:
+        from functions.sync import sync_handler
+        return sync_handler(req)
+    except ImportError as e:
+        logging.error(f"Failed to import sync_handler: {e}")
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": "Service unavailable due to missing dependencies"}),
+            status_code=503
+        )
