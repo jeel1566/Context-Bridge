@@ -6,7 +6,7 @@ google-auth==2.48.0
 python-jose[cryptography]==3.3.0
 pydantic-settings==2.7.1
 python-dotenv==1.0.0
-litellm==1.81.1
+litellm>=1.75.5,<1.80.17
 httpx==0.28.1
 pydantic>=2.11.1
 fastapi==0.123.0
