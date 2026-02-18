@@ -8,7 +8,8 @@
         "sidePanel",
         "activeTab",
         "identity",
-        "scripting"
+        "scripting",
+        "alarms"
     ],
     "host_permissions": [
         "https://chat.openai.com/*",

@@ -190,21 +190,75 @@ class ButtonInjector {
     }
 
     /**
+     * Send a message to the background with retry for transient errors.
+     * @param {Object} message
+     * @param {number} retries
+     */
+    async sendMessageWithRetry(message, retries = 3) {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                return await chrome.runtime.sendMessage(message);
+            } catch (error) {
+                const msg = error?.message || '';
+                // Context invalidated = extension was reloaded, no retry will help
+                if (msg.includes('Extension context invalidated')) {
+                    throw error;
+                }
+                const isTransient = msg.includes('Receiving end does not exist') ||
+                    msg.includes('Could not establish connection');
+                if (isTransient && attempt < retries) {
+                    await new Promise(r => setTimeout(r, 300 * attempt));
+                    continue;
+                }
+                throw error;
+            }
+        }
+    }
+
+    /**
+     * Show a non-intrusive banner asking the user to refresh the page.
+     */
+    showRefreshBanner() {
+        if (document.getElementById('cb-refresh-banner')) return;
+        const banner = document.createElement('div');
+        banner.id = 'cb-refresh-banner';
+        Object.assign(banner.style, {
+            position: 'fixed', top: '0', left: '0', right: '0', zIndex: '999999',
+            background: '#fbbf24', color: '#1a1a1a', padding: '10px 16px',
+            fontFamily: 'system-ui, sans-serif', fontSize: '14px', fontWeight: '600',
+            textAlign: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+        });
+        banner.innerHTML = `
+            ⚠️ Context Bridge was updated. Please <a href="#" id="cb-refresh-link"
+                style="color:#4f46e5;text-decoration:underline;font-weight:700">refresh this page</a> to continue.
+            <span id="cb-dismiss-banner" style="cursor:pointer;float:right;font-size:18px">&times;</span>
+        `;
+        document.body.appendChild(banner);
+        document.getElementById('cb-refresh-link')?.addEventListener('click', (e) => {
+            e.preventDefault(); location.reload();
+        });
+        document.getElementById('cb-dismiss-banner')?.addEventListener('click', () => banner.remove());
+    }
+
+    /**
      * Handle capture button click
      */
     async handleCapture() {
+        const button = document.getElementById(this.buttonId);
+
         try {
-            // Visual feedback
-            const button = document.getElementById(this.buttonId);
+            // Visual feedback - shrink
             if (button) {
                 button.style.transform = 'scale(0.95)';
+                button.style.opacity = '0.7';
                 setTimeout(() => {
                     button.style.transform = 'scale(1)';
+                    button.style.opacity = '0.9';
                 }, 150);
             }
 
-            // Send message to open side panel and capture
-            await chrome.runtime.sendMessage({
+            // Send message to open side panel and capture (with retry for transient errors)
+            await this.sendMessageWithRetry({
                 type: 'CAPTURE_AND_OPEN',
                 data: {
                     url: window.location.href,
@@ -214,6 +268,27 @@ class ButtonInjector {
 
         } catch (error) {
             console.error('Context Bridge: Capture failed', error);
+            const msg = error?.message || '';
+
+            if (msg.includes('Extension context invalidated')) {
+                // Extension was reloaded — content script is orphaned
+                this.showRefreshBanner();
+                if (button) {
+                    button.style.background = '#f59e0b';
+                    button.title = 'Extension updated — please refresh this page';
+                }
+            } else {
+                // Other error — show red feedback briefly
+                if (button) {
+                    const origBg = button.style.background;
+                    button.style.background = '#ef4444';
+                    button.title = 'Capture failed — try again';
+                    setTimeout(() => {
+                        button.style.background = origBg;
+                        button.title = 'Capture Context with Context Bridge';
+                    }, 2000);
+                }
+            }
         }
     }
 
