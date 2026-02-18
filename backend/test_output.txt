@@ -1,0 +1,24 @@
+﻿.venv311\Scripts\python
+.exe : E:\Context Bridg
+e\backend\.venv311\Scri
+pts\python.exe: No 
+module named pytest
+At line:1 char:1
++ .venv311\Scripts\pyth
+on.exe -m pytest test_a
+dk_integration.py::test
+_i ...
++ ~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+~~
+    + CategoryInfo     
+         : NotSpecifi  
+  ed: (E:\Context Br   
+ id...le named pyte    
+st:String) [], Rem    
+oteException
+    + FullyQualifiedEr 
+   rorId : NativeComm  
+  andError
+ 

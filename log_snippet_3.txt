@@ -1,0 +1,55 @@
+.38.0-py3-none-any.whl (19 kB)
+Collecting opentelemetry-exporter-otlp-proto-common==1.38.0
+  Using cached opentelemetry_exporter_otlp_proto_common-1.38.0-py3-none-any.whl (18 kB)
+Collecting opentelemetry-proto==1.38.0
+  Using cached opentelemetry_proto-1.38.0-py3-none-any.whl (72 kB)
+Collecting opentelemetry-exporter-otlp-proto-http>=1.36.0
+  Using cached opentelemetry_exporter_otlp_proto_http-1.37.0-py3-none-any.whl (19 kB)
+Collecting opentelemetry-exporter-otlp-proto-common==1.37.0
+  Using cached opentelemetry_exporter_otlp_proto_common-1.37.0-py3-none-any.whl (18 kB)
+Collecting opentelemetry-proto==1.37.0
+  Using cached opentelemetry_proto-1.37.0-py3-none-any.whl (72 kB)
+Collecting opentelemetry-semantic-conventions>=0.43b0
+  Using cached opentelemetry_semantic_conventions-0.58b0-py3-none-any.whl (207 kB)
+Collecting charset_normalizer<4,>=2
+  Using cached charset_normalizer-3.4.4-cp311-cp311-win_amd64.whl (106 kB)
+Collecting urllib3<3,>=1.21.1
+  Using cached urllib3-2.6.3-py3-none-any.whl (131 kB)
+Collecting numpy>=1.21
+  Downloading numpy-2.4.2-cp311-cp311-win_amd64.whl (12.6 MB)
+     ---------------------------------------- 12.6/12.6 MB 7.5 MB/s eta 0:00:00
+Collecting greenlet>=1
+  Using cached greenlet-3.3.1-cp311-cp311-win_amd64.whl (226 kB)
+Collecting alembic
+  Using cached alembic-1.18.3-py3-none-any.whl (262 kB)
+Collecting regex>=2022.1.18
+  Downloading regex-2026.1.15-cp311-cp311-win_amd64.whl (277 kB)
+     -------------------------------------- 277.8/277.8 kB 5.7 MB/s eta 0:00:00
+Collecting tzdata
+  Using cached tzdata-2025.3-py2.py3-none-any.whl (348 kB)
+Collecting huggingface-hub<2.0,>=0.16.4
+  Downloading huggingface_hub-1.4.1-py3-none-any.whl (553 kB)
+     -------------------------------------- 553.3/553.3 kB 8.6 MB/s eta 0:00:00
+Collecting pycparser
+  Using cached pycparser-3.0-py3-none-any.whl (48 kB)
+Collecting google-cloud-appengine-logging<2.0.0,>=0.1.3
+  Using cached google_cloud_appengine_logging-1.8.0-py3-none-any.whl (18 kB)
+Collecting google-cloud-audit-log<1.0.0,>=0.3.1
+  Using cached google_cloud_audit_log-0.4.0-py3-none-any.whl (44 kB)
+Collecting pyparsing<4,>=3.1
+  Using cached pyparsing-3.3.2-py3-none-any.whl (122 kB)
+Collecting filelock
+  Downloading filelock-3.20.3-py3-none-any.whl (16 kB)
+Collecting fsspec>=2023.5.0
+  Downloading fsspec-2026.2.0-py3-none-any.whl (202 kB)
+     ------------------------------------- 202.5/202.5 kB 12.0 MB/s eta 0:00:00
+Collecting hf-xet<2.0.0,>=1.2.0
+  Using cached hf_xet-1.2.0-cp37-abi3-win_amd64.whl (2.9 MB)
+Collecting shellingham
+  Using cached shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+Collecting typer-slim
+  Downloading typer_slim-0.21.1-py3-none-any.whl (47 kB)
+     ---------------------------------------- 47.4/47.4 kB 2.5 MB/s eta 0:00:00
+Collecting Mako
+  Using cached mako-1.3.10-py3-none-any.whl (78 kB)
+Installing collected packages: pywin32, azure-functions, zipp, websockets, watchdog, urllib3, uritemplate, tzdata, typing-extensions, tenacity, sqlparse, sniffio, six, shellingham, rpds-py, regex, PyYAML, python-multipart, python-dotenv, pyparsing, pyjwt, pycryptodome, pycparser, pyasn1, pyarrow, protobuf, propcache, packaging, numpy, multidict, mmh3, MarkupSafe, jiter, idna, httpx-sse, hf-xet, h11, greenlet, graphviz, google-crc32c, fsspec, frozenlist, filelock, fastuuid, docstring_parser, distro, colorama, cloudpickle, charset_normalizer, certifi, attrs, annotated-types, annotated-doc, aiosqlite, aiohappyeyeballs, yarl, tzlocal, typing-inspection, tqdm, sqlalchemy, shapely, rsa, requests, referencing, python-dateutil, pydantic-core, pyasn1-modules, proto-plus, opentelemetry-proto, Mako, jinja2, importlib-metadata, httplib2, httpcore, grpcio, googleapis-common-protos, google-resumable-media, ecdsa, click, cffi, anyio, aiosignal, uvicorn, typer-slim, tiktoken, starlette, python-jose, pydantic, opentelemetry-exporter-otlp-proto-common, opentelemetry-api, jsonschema-specifications, httpx, grpcio-status, grpc-interceptor, google-cloud-audit-log, cryptography, azure-core, alembic, aiohttp, sse-starlette, pydantic-settings, opentelemetry-semantic-conventions, openai, jsonschema, huggingface-hub, grpc-google-iam-v1, google-auth, fastapi, azure-cosmos, authlib, tokenizers, opentelemetry-sdk, mcp, google-auth-httplib2, google-api-core, opentelemetry-resourcedetector-gcp, opentelemetry-exporter-otlp-proto-http, litellm, google-genai, google-cloud-core, google-api-python-client, google-cloud-trace, google-cloud-storage, google-cloud-speech, google-cloud-secret-manager, google-cloud-resource-manager, google-cloud-pubsub, google-cloud-monitoring, google-cloud-discoveryengine, google-cloud-bigtable, google-cloud-bigquery-storage, google-cloud-bigquery, google-cloud-appengine-logging, opentelemetry-exporter-gcp-trace, opentelemetry-exporter-gcp-monitoring, google-cloud-spanner, google-cloud-logging, google-cloud-aiplatform, sqlalchemy-spanner, opentelemetry-exporter-gcp-logging, google-adk

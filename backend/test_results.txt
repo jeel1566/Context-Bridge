@@ -1,0 +1,17 @@
+STDOUT:
+============================= test session starts =============================
+platform win32 -- Python 3.11.0, pytest-9.0.2, pluggy-1.6.0 -- E:\Context Bridge\backend\.venv311\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: E:\Context Bridge\backend
+configfile: pytest.ini
+plugins: anyio-4.12.1, asyncio-1.3.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 3 items
+
+test_adk_integration.py::test_integration SKIPPED (Missing dependenc...) [ 33%]
+test_integration.py::test_integration SKIPPED (Missing dependency: L...) [ 66%]
+test_validator.py::test_validator SKIPPED (Missing dependency: LiteL...) [100%]
+
+============================= 3 skipped in 57.87s =============================
+
+STDERR:
