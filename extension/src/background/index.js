@@ -65,16 +65,17 @@ async function clearAuthToken() {
 async function apiRequest(endpoint, options = {}) {
   const token = await getAuthToken();
 
+  if (!token) {
+    throw new Error('Not authenticated. Please log in first.');
+  }
+
   const headers = {
     'Content-Type': 'application/json',
     ...options.headers,
+    'Authorization': `Bearer ${token}`,
   };
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  let response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers,
   });
@@ -86,17 +87,28 @@ async function apiRequest(endpoint, options = {}) {
       const newToken = await getAuthToken();
       if (newToken) {
         headers['Authorization'] = `Bearer ${newToken}`;
-        return fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
+        response = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
       }
     } catch (error) {
       console.error('Token refresh failed:', error);
       await clearAuthToken();
-      throw new Error('Authentication required');
+      throw new Error('Session expired. Please log in again.');
     }
+  }
+
+  if (!response.ok) {
+    let errorMsg = `API error ${response.status}`;
+    try {
+      const errorBody = await response.json();
+      errorMsg = errorBody.error || errorBody.message || errorMsg;
+    } catch { }
+    console.error('API request failed:', errorMsg, endpoint);
+    throw new Error(errorMsg);
   }
 
   return response;
 }
+
 
 // ============================================
 // Message Handlers
@@ -256,20 +268,36 @@ async function openSidePanel(tab) {
 
 async function handleCaptureAndOpen(contextData, tab) {
   try {
+    console.log('Context Bridge: handleCaptureAndOpen called', { contextData, tabId: tab?.id, windowId: tab?.windowId });
+
     // Open the side panel first
     if (tab && tab.windowId) {
       await chrome.sidePanel.open({ windowId: tab.windowId });
+      console.log('Context Bridge: Side panel opened');
+    } else {
+      console.warn('Context Bridge: No tab/windowId, cannot open side panel');
     }
 
     // Wait a moment for panel to open
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     // Capture context from the tab
     if (tab && tab.id) {
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_CONTEXT' });
+      console.log('Context Bridge: Sending CAPTURE_CONTEXT to tab', tab.id);
 
-      if (response && response.messages) {
+      let response;
+      try {
+        response = await chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_CONTEXT' });
+      } catch (captureError) {
+        console.error('Context Bridge: CAPTURE_CONTEXT failed', captureError);
+        return { error: captureError.message };
+      }
+
+      console.log('Context Bridge: Capture response', JSON.stringify(response)?.substring(0, 500));
+
+      if (response && response.messages && response.messages.length > 0) {
         // Send to side panel
+        console.log('Context Bridge: Sending NEW_CONTEXT_AVAILABLE to side panel');
         chrome.runtime.sendMessage({
           type: 'NEW_CONTEXT_AVAILABLE',
           data: {
@@ -277,10 +305,14 @@ async function handleCaptureAndOpen(contextData, tab) {
             content: response.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
             tags: [response.platform || 'chat'],
           }
-        }).catch(() => {
-          // Side panel might not be ready yet
+        }).catch((err) => {
+          console.error('Context Bridge: Failed to send to side panel', err);
         });
+      } else {
+        console.warn('Context Bridge: No messages captured. Response:', response);
       }
+    } else {
+      console.warn('Context Bridge: No tab.id, cannot capture');
     }
 
     return { success: true };
