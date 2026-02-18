@@ -16,7 +16,8 @@
         "https://claude.ai/*",
         "https://gemini.google.com/*",
         "https://*.anthropic.com/*",
-        "https://czmpxzvcbwyxjhwrlgri.supabase.co/*"
+        "https://czmpxzvcbwyxjhwrlgri.supabase.co/*",
+        "https://context-bridge-api-dxfhdzabfqgrdhc2.eastus-01.azurewebsites.net/*"
     ],
     "background": {
         "service_worker": "src/background/index.js",

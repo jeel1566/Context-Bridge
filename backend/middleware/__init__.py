@@ -28,6 +28,10 @@ from .errors import (
     require_json_body,
     require_fields,
 )
+from .cors import (
+    apply_cors_headers,
+    handle_cors_preflight,
+)
 
 __all__ = [
     # Auth
@@ -51,4 +55,8 @@ __all__ = [
     'handle_exception',
     'require_json_body',
     'require_fields',
+    
+    # CORS
+    'apply_cors_headers',
+    'handle_cors_preflight',
 ]

@@ -1,0 +1,15 @@
+STDOUT:
+
+STDERR:
+Traceback (most recent call last):
+  File "E:\Context Bridge\backend\test_validator.py", line 14, in <module>
+    from backend.agents.scope_validator import validate_input, validate_output
+  File "E:\Context Bridge\backend\agents\__init__.py", line 7, in <module>
+    from . import agent
+  File "E:\Context Bridge\backend\agents\agent.py", line 18, in <module>
+    from .scope_validator import scope_validator, validate_input, validate_output
+  File "E:\Context Bridge\backend\agents\scope_validator.py", line 22, in <module>
+    from google.adk.models.lite_llm import LiteLlm
+  File "E:\Context Bridge\backend\.venv311\Lib\site-packages\google\adk\models\lite_llm.py", line 46, in <module>
+    raise ImportError(
+ImportError: LiteLLM support requires: pip install google-adk[extensions]
