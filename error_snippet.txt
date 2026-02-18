@@ -1,0 +1,99 @@
+ents. This could take a while.
+INFO: pip is looking at multiple versions of pydantic-settings to determine which version is compatible with other requirements. This could take a while.
+INFO: pip is looking at multiple versions of python-jose[cryptography] to determine which version is compatible with other requirements. This could take a while.
+INFO: pip is looking at multiple versions of google-auth to determine which version is compatible with other requirements. This could take a while.
+INFO: pip is looking at multiple versions of pycryptodome to determine which version is compatible with other requirements. This could take a while.
+INFO: pip is looking at multiple versions of azure-cosmos to determine which version is compatible with other requirements. This could take a while.
+INFO: pip is looking at multiple versions of <Python from Requires-Python> to determine which version is compatible with other requirements. This could take a while.
+INFO: pip is looking at multiple versions of google-adk to determine which version is compatible with other requirements. This could take a while.
+INFO: pip is looking at multiple versions of azure-functions to determine which version is compatible with other requirements. This could take a while.
+.venv311\Scripts\pytho
+n.exe : ERROR: Cannot 
+install -r backend\req
+uirements.txt (line 
+12), -r backend\requir
+ements.txt (line 14), 
+-r backend\requirement
+s.txt (line 2), -r bac
+kend\requirements.txt 
+(line 7), -r backend\r
+equirements.txt (line 
+9), google-cloud-aipla
+tform==1.132.0, google
+-cloud-aiplatform[agen
+t-engines]==1.132.0, g
+oogle-cloud-aiplatform
+[agent-engines]==1.133
+.0, google-cloud-aipla
+tform[agent-engines]==
+1.134.0, google-cloud-
+aiplatform[agent-engin
+es]==1.135.0, google-c
+loud-aiplatform[agent-
+engines]==1.136.0 and 
+pydantic==2.10.6 
+because these package 
+versions have 
+conflicting 
+dependencies.
+At line:1 char:1
++ .venv311\Scripts\pyt
+hon.exe -m pip 
+install -r backend\req
+uirements.tx ...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : 
+NotSpecified: (E    
+RROR: Cannot i...g de 
+   
+pendencies.:String) [ 
+   ], RemoteException
+    + 
+FullyQualifiedError   
+ Id : 
+NativeCommandErr    or
+ 
+
+The conflict is caused by:
+    The user requested google-cloud-aiplatform==1.132.0
+    google-cloud-aiplatform[agent-engines] 1.136.0 depends on google-cloud-aiplatform 1.136.0 (from https://files.pythonhosted.org/packages/55/e8/f317dc96c9c73846dd3e4d16691cc5f248801f46354d9d57f2c67fd67413/google_cloud_aiplatform-1.136.0-py2.py3-none-any.whl (from https://pypi.org/simple/google-cloud-aiplatform/) (requires-python:>=3.9))
+    The user requested google-cloud-aiplatform==1.132.0
+    google-cloud-aiplatform[agent-engines] 1.135.0 depends on google-cloud-aiplatform 1.135.0 (from https://files.pythonhosted.org/packages/bb/66/d81fb4b81db3ee2f00f8b391f91cdb0e01d6886a2b78105f5d9b6c376104/google_cloud_aiplatform-1.135.0-py2.py3-none-any.whl (from https://pypi.org/simple/google-cloud-aiplatform/) (requires-python:>=3.9))
+    The user requested google-cloud-aiplatform==1.132.0
+    google-cloud-aiplatform[agent-engines] 1.134.0 depends on google-cloud-aiplatform 1.134.0 (from https://files.pythonhosted.org/packages/85/f4/6863f3951eb07afd790fe6f8f1a5984224f7df836546a34ed29ab0cfe9af/google_cloud_aiplatform-1.134.0-py2.py3-none-any.whl (from https://pypi.org/simple/google-cloud-aiplatform/) (requires-python:>=3.9))
+    The user requested google-cloud-aiplatform==1.132.0
+    google-cloud-aiplatform[agent-engines] 1.133.0 depends on google-cloud-aiplatform 1.133.0 (from https://files.pythonhosted.org/packages/01/5b/ef74ff65aebb74eaba51078e33ddd897247ba0d1197fd5a7953126205519/google_cloud_aiplatform-1.133.0-py2.py3-none-any.whl (from https://pypi.org/simple/google-cloud-aiplatform/) (requires-python:>=3.9))
+    The user requested pydantic==2.10.6
+    google-adk 1.23.0 depends on pydantic<3.0.0 and >=2.0
+    pydantic-settings 2.7.1 depends on pydantic>=2.7.0
+    litellm 1.81.1 depends on pydantic<3.0.0 and >=2.5.0
+    fastapi 0.123.0 depends on pydantic!=1.8, !=1.8.1, !=2.0.0, !=2.0.1, !=2.1.0, <3.0.0 and >=1.7.4
+    google-cloud-aiplatform 1.132.0 depends on pydantic<3
+    google-cloud-aiplatform[agent-engines] 1.132.0 depends on pydantic<3
+    google-cloud-aiplatform[agent-engines] 1.132.0 depends on pydantic<3 and >=2.11.1; extra == "agent-engines"
+
+To fix this you could try to:
+1. loosen the range of package versions you've specified
+2. remove package versions to allow pip attempt to solve the dependency conflict
+
+ERROR: 
+ResolutionImpossible: 
+for help visit https:/
+/pip.pypa.io/en/latest
+/topics/dependency-res
+olution/#dealing-with-
+dependency-conflicts
+
+[notice] A new 
+release of pip 
+available: 22.3 -> 
+26.0.1
+[notice] To update, 
+run: E:\Context Bridge
+\.venv311\Scripts\pyth
+on.exe -m pip install 
+--upgrade pip

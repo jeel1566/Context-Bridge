@@ -1,0 +1,4692 @@
+= Context Bridge - Security and Code Quality Audit Report
+
+:toc:
+:toclevels: 3
+:sectnums:
+
+== Executive Summary
+
+**Project:** Context Bridge - Chrome Extension + Azure Functions Backend  
+**Audit Date:** 2026-02-08  
+**Auditor:** Senior Security & Code Quality Review  
+**Scope:** Full codebase (Backend + Extension)
+
+=== Overall Assessment
+
+*WARNING: NOT PRODUCTION READY*
+
+Context Bridge has a solid architectural foundation but suffers from critical security vulnerabilities and missing production-ready features. The codebase demonstrates good software engineering practices in some areas but falls short in security, logging, and error handling.
+
+=== Issue Summary by Severity
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| 🔴 CRITICAL | 11 | Must fix immediately |
+| 🟠 HIGH | 22 | Fix this sprint |
+| 🟡 MEDIUM | 28 | Fix next sprint |
+| 🟢 LOW | 14 | Technical debt |
+| *Total* | *75* | |
+
+=== Key Findings
+
+* **Security is the biggest concern** - Multiple critical vulnerabilities must be fixed immediately
+* **Logging is non-existent** - Cannot debug or monitor production issues
+* **Code quality is inconsistent** - Some areas well-written, others lacking
+* **Testing is missing** - No confidence in changes without tests
+* **Not production ready** - Requires 4 weeks of focused work
+
+=== Recommendation
+
+*Do not deploy to production until:*
+
+* All critical security vulnerabilities are fixed
+* Logging is fully configured and operational
+* Comprehensive testing is implemented
+* Error handling is comprehensive
+* Monitoring and alerting are in place
+
+*Estimated Time to Production Ready:* 4 weeks  
+*Recommended Team Size:* 2-3 senior developers
+
+== CRITICAL Issues (11)
+
+=== Issue 1: Logging Completely Non-Functional
+
+*File:* [`backend/function_app.py`](backend/function_app.py:7)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Observability
+
+==== Description
+
+The codebase imports `logging` module everywhere but has **no configuration**. This means:
+
+* Logs go to stdout/stderr (Azure Functions default)
+* No log levels are configured
+* No structured logging (JSON format)
+* No correlation IDs for request tracing
+* No audit logging for sensitive operations
+* No integration with Azure Application Insights
+
+==== Impact
+
+* Cannot debug production issues
+* No visibility into system behavior
+* Cannot trace requests across functions
+* No audit trail for compliance
+* Cannot monitor system health
+
+==== Recommended Fix
+
+Create `backend/logging_config.py`:
+
+[source,python]
+----
+import logging
+import json
+import os
+from datetime import datetime
+from typing import Optional
+
+class JsonFormatter(logging.Formatter):
+    """Structured JSON formatter for production logging."""
+    
+    def format(self, record):
+        log_data = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'level': record.levelname,
+            'logger': record.name,
+            'message': record.getMessage(),
+            'environment': os.environ.get('ENVIRONMENT', 'development'),
+        }
+        
+        # Add correlation ID if available
+        if hasattr(record, 'correlation_id'):
+            log_data['correlation_id'] = record.correlation_id
+        
+        # Add user ID if available
+        if hasattr(record, 'user_id'):
+            log_data['user_id'] = record.user_id
+        
+        # Add request ID if available
+        if hasattr(record, 'request_id'):
+            log_data['request_id'] = record.request_id
+        
+        if record.exc_info:
+            log_data['exception'] = self.formatException(record.exc_info)
+        
+        return json.dumps(log_data)
+
+def configure_logging():
+    """Configure structured logging for Context Bridge."""
+    
+    log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # Remove existing handlers
+    root_logger.handlers.clear()
+    
+    # Console handler with JSON formatter
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(JsonFormatter())
+    root_logger.addHandler(console_handler)
+    
+    # File handler for production
+    if environment == 'production':
+        from azure.monitor.opentelemetry import configure_azure_monitoring
+        configure_azure_monitoring()
+    
+    return root_logger
+----
+
+Add to `backend/function_app.py`:
+
+[source,python]
+----
+from logging_config import configure_logging
+
+# Configure logging on startup
+configure_logging()
+----
+
+=== Issue 2: In-Memory Storage Fallback Exposes User Data
+
+*File:* [`backend/services/cosmos.py`](backend/services/cosmos.py:266)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+Silent fallback to in-memory storage when Cosmos DB credentials are missing:
+
+[source,python]
+----
+def _initialize_in_memory(self):
+    self._memories = InMemoryStorage('memories')
+    logger.warning("Using in-memory storage - data will not persist!")  # Only warning, not error
+
+def initialize(self):
+    if endpoint and key:
+        self._initialize_cosmos_db(endpoint, key, database_name)
+    elif connection_string:
+        self._initialize_cosmos_db_from_connection(connection_string, database_name)
+    else:
+        self._initialize_in_memory()  # Falls back silently
+----
+
+==== Impact
+
+* Data loss on function restart
+* No user notification of data loss
+* Anyone with function access can read memory
+* No encryption for in-memory data
+* No backup/recovery mechanism
+
+==== Recommended Fix
+
+Remove in-memory fallback from production:
+
+[source,python]
+----
+def initialize(self):
+    endpoint = os.environ.get('COSMOS_ENDPOINT')
+    key = os.environ.get('COSMOS_KEY')
+    connection_string = os.environ.get('COSMOS_CONNECTION')
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    if environment == 'production':
+        if not (endpoint and key) and not connection_string:
+            raise RuntimeError(
+                "Cosmos DB not configured in production. "
+                "Set COSMOS_ENDPOINT and COSMOS_KEY or COSMOS_CONNECTION."
+            )
+    
+    if endpoint and key:
+        self._initialize_cosmos_db(endpoint, key, database_name)
+    elif connection_string:
+        self._initialize_cosmos_db_from_connection(connection_string, database_name)
+    elif environment == 'development':
+        logger.warning("Using in-memory storage for development only")
+        self._initialize_in_memory()
+    else:
+        raise RuntimeError("Cosmos DB configuration required")
+----
+
+=== Issue 3: Encryption Optional - Data Stored in Plaintext
+
+*File:* [`backend/services/encryption.py`](backend/services/encryption.py:82)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+Encryption is optional and falls back to plaintext:
+
+[source,python]
+----
+def __init__(self, master_key: Optional[str] = None):
+    if not CRYPTO_AVAILABLE:
+        logger.warning("Crypto not available - encryption disabled")  # Only warning
+        self._key = None
+        return
+        
+    key_hex = master_key or os.environ.get('ENCRYPTION_KEY')
+    
+    if not key_hex:
+        logger.warning("No encryption key configured - encryption disabled")  # Only warning
+        self._key = None
+        return
+
+def encrypt(self, plaintext: str) -> str:
+    if not self.is_configured:
+        return plaintext  # Returns plaintext without warning
+----
+
+==== Impact
+
+* User data stored in plaintext in Cosmos DB
+* No indication to users that data is not encrypted
+* Silent failure of encryption
+* No audit log when encryption disabled
+
+==== Recommended Fix
+
+Make encryption required in production:
+
+[source,python]
+----
+def __init__(self, master_key: Optional[str] = None):
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    if not CRYPTO_AVAILABLE:
+        raise RuntimeError(
+            "pycryptodome not available. Install with: pip install pycryptodome"
+        )
+        
+    key_hex = master_key or os.environ.get('ENCRYPTION_KEY')
+    
+    if not key_hex:
+        if environment == 'production':
+            raise RuntimeError(
+                "Encryption key not configured in production. "
+                "Set ENCRYPTION_KEY environment variable."
+            )
+        else:
+            logger.warning("No encryption key - encryption disabled for development")
+            self._key = None
+            return
+    
+    # Validate key length
+    if len(key_hex) < 32:
+        raise RuntimeError("Encryption key must be at least 32 characters")
+    
+    self._key = bytes.fromhex(key_hex)
+    logger.info("Encryption service initialized successfully")
+
+def encrypt(self, plaintext: str) -> str:
+    if not self.is_configured:
+        environment = os.environ.get('ENVIRONMENT', 'development')
+        if environment == 'production':
+            raise RuntimeError("Encryption not configured - cannot encrypt data")
+        logger.warning("Encryption not configured - returning plaintext")
+        return plaintext
+    # ... rest of encryption logic
+----
+
+=== Issue 4: Authentication Bypass via DEV_MODE
+
+*File:* [`backend/middleware/auth.py`](backend/middleware/auth.py:104)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+DEV_MODE bypasses all authentication:
+
+[source,python]
+----
+dev_mode = os.environ.get('DEV_MODE', 'false').lower() == 'true'
+if dev_mode:
+    logger.warning("DEV_MODE enabled - using guest user (no auth required)")  # Only warning
+    return {
+        "id": "guest-local-dev",
+        "email": "guest@localhost",
+        "guest": True  # Guest has full access
+    }
+----
+
+==== Impact
+
+* Anyone can bypass authentication with DEV_MODE
+* Guest user has full access to all data
+* No indication to users that they're in guest mode
+* Could be accidentally enabled in production
+
+==== Recommended Fix
+
+Remove DEV_MODE bypass from production:
+
+[source,python]
+----
+def authenticate_request(req: func.HttpRequest) -> dict:
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    # DEV_MODE only allowed in development
+    dev_mode = os.environ.get('DEV_MODE', 'false').lower() == 'true'
+    if dev_mode and environment == 'development':
+        logger.warning("DEV_MODE enabled - using guest user (development only)")
+        return {
+            "id": "guest-local-dev",
+            "email": "guest@localhost",
+            "guest": True
+        }
+    
+    # Production requires authentication
+    if environment == 'production':
+        # Remove DEV_MODE check entirely
+        pass
+    
+    # ... rest of authentication logic
+----
+
+=== Issue 5: Mock Authentication in Development
+
+*File:* [`backend/functions/auth.py`](backend/functions/auth.py:84)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+Mock authentication can be accidentally enabled in production:
+
+[source,python]
+----
+if id_token and google_requests:
+    idinfo = id_token.verify_oauth2_token(token, ...)
+else:
+    # Mock authentication - security risk
+    logger.warning("Google auth not available - using mock for development")
+    idinfo = {
+        "sub": "mock-user-id",
+        "email": "dev@example.com",
+        "name": "Dev User",
+        "picture": ""
+    }
+----
+
+==== Impact
+
+* Mock authentication can be accidentally enabled in production
+* No real security when mock is active
+* No token revocation mechanism
+* No session management
+
+==== Recommended Fix
+
+Remove mock authentication from production builds:
+
+[source,python]
+----
+async def login_with_google(req: func.HttpRequest) -> func.HttpResponse:
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    try:
+        body = require_json_body(req)
+        token = body.get('idToken')
+        
+        if not token:
+            return func.HttpResponse(
+                json.dumps({"error": "idToken is required"}),
+                status_code=400,
+                mimetype="application/json"
+            )
+        
+        # Verify Google token
+        try:
+            idinfo = id_token.verify_oauth2_token(
+                token,
+                google_requests.Request(),
+                os.environ.get('GOOGLE_CLIENT_ID')
+            )
+        except Exception as e:
+            logger.error(f"Google token verification failed: {e}")
+            return func.HttpResponse(
+                json.dumps({"error": "Invalid token"}),
+                status_code=401,
+                mimetype="application/json"
+            )
+        
+        # ... rest of authentication logic
+        
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        return func.HttpResponse(
+            json.dumps({"error": "Authentication failed"}),
+            status_code=500,
+            mimetype="application/json"
+        )
+----
+
+=== Issue 6: Insecure Token Fallback
+
+*File:* [`backend/functions/auth.py`](backend/functions/auth.py:120)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+Generates random tokens when JWT not configured:
+
+[source,python]
+----
+if jwt_service.is_configured:
+    tokens = jwt_service.create_tokens(...)
+else:
+    # Generates random tokens - no security
+    import secrets
+    logger.warning("JWT not configured - using insecure token")
+    tokens = {
+        "access_token": secrets.token_urlsafe(32),
+        "refresh_token": secrets.token_urlsafe(32),
+        "token_type": "bearer",
+        "expires_in": 900
+    }
+----
+
+==== Impact
+
+* Insecure tokens provide no real security
+* No token validation possible
+* No session management
+* Anyone can generate valid tokens
+
+==== Recommended Fix
+
+Fail startup if JWT not configured in production:
+
+[source,python]
+----
+async def login_with_google(req: func.HttpRequest) -> func.HttpResponse:
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    # ... token verification logic ...
+    
+    # Generate JWT tokens
+    if not jwt_service.is_configured:
+        if environment == 'production':
+            logger.error("JWT service not configured in production")
+            return func.HttpResponse(
+                json.dumps({"error": "Authentication service unavailable"}),
+                status_code=500,
+                mimetype="application/json"
+            )
+        else:
+            logger.warning("JWT not configured - using development tokens")
+            tokens = {
+                "access_token": secrets.token_urlsafe(32),
+                "refresh_token": secrets.token_urlsafe(32),
+                "token_type": "bearer",
+                "expires_in": 900
+            }
+    else:
+        tokens = jwt_service.create_tokens(
+            user_id=idinfo['sub'],
+            email=idinfo.get('email'),
+            name=idinfo.get('name')
+        )
+    
+    # ... rest of logic
+----
+
+=== Issue 7: Anonymous Azure Functions Auth Level
+
+*File:* [`backend/function_app.py`](backend/function_app.py:17)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+Anonymous auth level - no Azure-level security:
+
+[source,python]
+----
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)  # CRITICAL
+----
+
+==== Impact
+
+* No Azure-level authentication
+* All authentication handled by application middleware
+* Application middleware has bypass mechanisms
+* No defense in depth
+
+==== Recommended Fix
+
+Use FUNCTION auth level for production:
+
+[source,python]
+----
+environment = os.environ.get('ENVIRONMENT', 'development')
+
+if environment == 'production':
+    app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+else:
+    app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+----
+
+=== Issue 8: Legacy Header Authentication Bypass
+
+*File:* [`backend/middleware/auth.py`](backend/middleware/auth.py:118)  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+Legacy X-User-Id header allows impersonation:
+
+[source,python]
+----
+user_id = req.headers.get('X-User-Id')
+if user_id:
+    logger.warning("Using legacy X-User-Id header - should migrate to JWT")  # Still allows it
+    return {
+        "id": user_id,
+        "email": None,
+        "legacy": True  # No enforcement
+    }
+----
+
+==== Impact
+
+* Legacy header allows impersonation
+* Anyone can set X-User-Id header
+* No validation of user identity
+* Security bypass mechanism
+
+==== Recommended Fix
+
+Remove legacy header support:
+
+[source,python]
+----
+def authenticate_request(req: func.HttpRequest) -> dict:
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    # Remove legacy header support in production
+    if environment == 'production':
+        # Do not check X-User-Id header
+        pass
+    else:
+        # Allow legacy header only in development
+        user_id = req.headers.get('X-User-Id')
+        if user_id:
+            logger.warning("Using legacy X-User-Id header - development only")
+            return {
+                "id": user_id,
+                "email": None,
+                "legacy": True
+            }
+    
+    # ... rest of JWT authentication logic
+----
+
+=== Issue 9: No Audit Logging for Sensitive Operations
+
+*File:* Multiple files  
+*Severity:* 🔴 CRITICAL  
+*Type:* Compliance
+
+==== Description
+
+No audit logs for sensitive operations:
+
+* Memory creation/update/delete
+* User authentication events
+* PII redaction events
+* Encryption/decryption operations
+* Failed authentication attempts
+* Data access events
+
+==== Impact
+
+* Cannot track sensitive operations
+* No compliance with security standards
+* Cannot investigate security incidents
+* No audit trail for legal requirements
+
+==== Recommended Fix
+
+Implement audit logging:
+
+[source,python]
+----
+# Add to backend/services/audit_logger.py
+import logging
+from typing import Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+def log_memory_operation(
+    operation: str,
+    user_id: str,
+    memory_id: str,
+    details: Optional[Dict[str, Any]] = None
+):
+    """Log memory CRUD operations for audit."""
+    logger.info(
+        f"Memory {operation}",
+        extra={
+            'audit': True,
+            'operation': operation,
+            'user_id': user_id,
+            'memory_id': memory_id,
+            'details': details or {}
+        }
+    )
+
+def log_auth_event(
+    event: str,
+    user_id: str,
+    success: bool,
+    details: Optional[Dict[str, Any]] = None
+):
+    """Log authentication events for audit."""
+    logger.info(
+        f"Auth {event}: {'success' if success else 'failed'}",
+        extra={
+            'audit': True,
+            'event': event,
+            'user_id': user_id,
+            'success': success,
+            'details': details or {}
+        }
+    )
+
+def log_pii_redaction(
+    user_id: str,
+    content_type: str,
+    pii_count: int,
+    details: Optional[Dict[str, Any]] = None
+):
+    """Log PII redaction events for audit."""
+    logger.info(
+        f"PII redaction: {pii_count} items detected",
+        extra={
+            'audit': True,
+            'event': 'pii_redaction',
+            'user_id': user_id,
+            'content_type': content_type,
+            'pii_count': pii_count,
+            'details': details or {}
+        }
+    )
+----
+
+=== Issue 10: No Input Validation and Sanitization
+
+*File:* Multiple files  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+Missing input validation and sanitization:
+
+[source,python]
+----
+# backend/functions/memories.py
+body = require_json_body(req)
+require_fields(body, ['title', 'content'])  # No length validation, no sanitization
+----
+
+==== Impact
+
+* XSS vulnerabilities
+* SQL injection potential
+* Data corruption
+* Security bypasses
+
+==== Recommended Fix
+
+Implement comprehensive input validation:
+
+[source,python]
+----
+# Add to backend/services/validator.py
+from typing import Any, Dict, List, Optional
+import re
+
+class ValidationError(Exception):
+    """Raised when validation fails."""
+    pass
+
+def validate_memory_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate memory data before storage."""
+    
+    # Validate title
+    if 'title' not in data or not data['title']:
+        raise ValidationError("Title is required")
+    
+    title = str(data['title']).strip()
+    if len(title) > 200:
+        raise ValidationError("Title must be less than 200 characters")
+    
+    # Validate content
+    if 'content' not in data or not data['content']:
+        raise ValidationError("Content is required")
+    
+    content = str(data['content']).strip()
+    if len(content) > 10000:
+        raise ValidationError("Content must be less than 10,000 characters")
+    
+    # Sanitize content (basic XSS prevention)
+    content = sanitize_html(content)
+    
+    return {
+        'title': title,
+        'content': content,
+        'tags': data.get('tags', [])
+    }
+
+def sanitize_html(text: str) -> str:
+    """Basic HTML sanitization to prevent XSS."""
+    # Remove dangerous tags
+    dangerous_tags = ['script', 'iframe', 'object', 'embed', 'form']
+    for tag in dangerous_tags:
+        text = re.sub(f'<{tag}.*?>.*?</{tag}>', '', text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(f'<{tag}.*?/>', '', text, flags=re.IGNORECASE)
+    
+    # Remove dangerous attributes
+    dangerous_attrs = ['on\w+', 'javascript:', 'data:']
+    for attr in dangerous_attrs:
+        text = re.sub(f'{attr}=["\'][^"\']*["\']', '', text, flags=re.IGNORECASE)
+    
+    return text
+----
+
+=== Issue 11: No Rate Limiting on API Endpoints
+
+*File:* All endpoint files  
+*Severity:* 🔴 CRITICAL  
+*Type:* Security
+
+==== Description
+
+No rate limiting on any endpoints:
+
+[source,python]
+----
+# backend/functions/memories.py
+async def list_memories(user_id: str):
+    # No rate limiting - can be abused
+    memories = await cosmos.memories.query(query, parameters)
+----
+
+==== Impact
+
+* DoS vulnerability
+* API abuse possible
+* Resource exhaustion
+* Cost escalation
+
+==== Recommended Fix
+
+Implement rate limiting:
+
+[source,python]
+----
+# Add to backend/middleware/rate_limiter.py
+import time
+from collections import defaultdict
+from typing import Dict
+import logging
+
+logger = logging.getLogger(__name__)
+
+class RateLimiter:
+    """Simple in-memory rate limiter."""
+    
+    def __init__(self, max_requests: int = 100, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: Dict[str, List[float]] = defaultdict(list)
+    
+    def is_allowed(self, identifier: str) -> bool:
+        """Check if request is allowed for identifier."""
+        now = time.time()
+        
+        # Clean old requests
+        self.requests[identifier] = [
+            req_time for req_time in self.requests[identifier]
+            if now - req_time < self.window_seconds
+        ]
+        
+        # Check if under limit
+        if len(self.requests[identifier]) >= self.max_requests:
+            logger.warning(f"Rate limit exceeded for {identifier}")
+            return False
+        
+        # Record request
+        self.requests[identifier].append(now)
+        return True
+    
+    def get_remaining(self, identifier: str) -> int:
+        """Get remaining requests for identifier."""
+        return self.max_requests - len(self.requests[identifier])
+
+# Create rate limiters for different endpoints
+memory_limiter = RateLimiter(max_requests=100, window_seconds=60)
+auth_limiter = RateLimiter(max_requests=5, window_seconds=60)
+share_limiter = RateLimiter(max_requests=10, window_seconds=60)
+----
+
+== HIGH Issues (22)
+
+=== Issue 12: Hardcoded API URL in Extension
+
+*File:* [`extension/src/background/index.js`](extension/src/background/index.js:10)  
+*Severity:* 🟠 HIGH  
+*Type:* Configuration
+
+==== Description
+
+Hardcoded API URL:
+
+[source,javascript]
+----
+const API_BASE_URL = 'https://context-bridge-api-dxfhdzabfqgrdhc2.eastus-01.azurewebsites.net/api';  // Hardcoded
+----
+
+==== Impact
+
+* Cannot change API URL without code changes
+* Difficult to manage multiple environments
+* Security risk if URL exposed
+
+==== Recommended Fix
+
+Move to configuration:
+
+[source,javascript]
+----
+// extension/src/config.js
+const CONFIG = {
+    API_BASE_URL: chrome.runtime.getManifest().version.includes('dev') 
+        ? 'http://localhost:7071/api'
+        : 'https://context-bridge-api-dxfhdzabfqgrdhc2.eastus-01.azurewebsites.net/api'
+};
+
+export default CONFIG;
+----
+
+=== Issue 13: No Error Handling in API Requests
+
+*File:* [`extension/src/background/index.js`](extension/src/background/index.js:25)  
+*Severity:* 🟠 HIGH  
+*Type:* Reliability
+
+==== Description
+
+No error handling in API requests:
+
+[source,javascript]
+----
+async function apiRequest(endpoint, options = {}) {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...options,
+        headers,
+    });
+    // No try-catch, no error handling
+    if (response.status === 401) {
+        // Only handles 401, not other errors
+    }
+    return response;  // Can return failed response
+}
+----
+
+==== Impact
+
+* Unhandled errors crash extension
+* Poor user experience
+* No error recovery
+* Difficult to debug
+
+==== Recommended Fix
+
+Add comprehensive error handling:
+
+[source,javascript]
+----
+async function apiRequest(endpoint, options = {}) {
+    try {
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+            ...options,
+            headers,
+        });
+        
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+            throw new Error(error.error || `HTTP ${response.status}`);
+        }
+        
+        return response;
+    } catch (error) {
+        console.error('API request failed:', error);
+        throw error;
+    }
+}
+----
+
+=== Issue 14: Token Refresh Has No Retry Limit
+
+*File:* [`extension/src/background/index.js`](extension/src/background/index.js:50)  
+*Severity:* 🟠 HIGH  
+*Type:* Reliability
+
+==== Description
+
+No retry logic for token refresh:
+
+[source,javascript]
+----
+async function refreshAccessToken() {
+    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: result.refreshToken }),
+    });
+    // No retry logic, no exponential backoff
+    if (response.ok) {
+        const data = await response.json();
+        await setAuthToken(data.data.access_token);
+        return true;
+    }
+    return false;
+}
+----
+
+==== Impact
+
+* Token refresh failures not retried
+* Users logged out unnecessarily
+* Poor user experience
+
+==== Recommended Fix
+
+Add retry logic with exponential backoff:
+
+[source,javascript]
+----
+async function refreshAccessToken(maxRetries = 3) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken: result.refreshToken }),
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                await setAuthToken(data.data.access_token);
+                return true;
+            }
+            
+            // Exponential backoff
+            if (attempt < maxRetries - 1) {
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+            }
+        } catch (error) {
+            console.error('Token refresh failed:', error);
+            if (attempt < maxRetries - 1) {
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+            }
+        }
+    }
+    return false;
+}
+----
+
+=== Issue 15: No Input Sanitization in Side Panel
+
+*File:* [`extension/src/sidepanel/index.js`](extension/src/sidepanel/index.js:120)  
+*Severity:* 🟠 HIGH  
+*Type:* Security
+
+==== Description
+
+Basic escaping, not comprehensive:
+
+[source,javascript]
+----
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;  // Basic escaping, not comprehensive
+}
+----
+
+==== Impact
+
+* XSS vulnerability
+* Potential code injection
+* Security risk
+
+==== Recommended Fix
+
+Use DOMPurify for comprehensive sanitization:
+
+[source,javascript]
+----
+import DOMPurify from 'dompurify';
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return DOMPurify.sanitize(text, {
+        ALLOWED_TAGS: ['b', 'i', 'u', 'em', 'strong', 'a', 'p', 'br'],
+        ALLOWED_ATTR: ['href', 'target']
+    });
+}
+----
+
+=== Issue 16: Uses Deprecated execCommand
+
+*File:* [`extension/src/sidepanel/index.js`](extension/src/sidepanel/index.js:180)  
+*Severity:* 🟠 HIGH  
+*Type:* Code Quality
+
+==== Description
+
+Uses deprecated execCommand API:
+
+[source,javascript]
+----
+function copyShareLink() {
+    elements.shareLink.select();
+    document.execCommand('copy');  // Deprecated API
+}
+----
+
+==== Impact
+
+* Deprecated API may stop working
+* Poor browser compatibility
+* Not future-proof
+
+==== Recommended Fix
+
+Use Clipboard API:
+
+[source,javascript]
+----
+async function copyShareLink() {
+    try {
+        await navigator.clipboard.writeText(elements.shareLink.value);
+        showToast('Link copied to clipboard');
+    } catch (error) {
+        console.error('Failed to copy:', error);
+        showToast('Failed to copy link', 'error');
+    }
+}
+----
+
+=== Issue 17: No Loading States in Side Panel
+
+*File:* [`extension/src/sidepanel/index.js`](extension/src/sidepanel/index.js:200)  
+*Severity:* 🟠 HIGH  
+*Type:* User Experience
+
+==== Description
+
+No loading indicators:
+
+[source,javascript]
+----
+async function handleLogin() {
+    try {
+        elements.loginBtn.disabled = true;
+        elements.loginBtn.textContent = 'Logging in...';
+        const result = await sendMessage('LOGIN_WITH_GOOGLE');
+        // No loading indicator on other elements
+        if (result.success) {
+            updateAuthUI({ isAuthenticated: true, user: result.user });
+            await loadMemories();
+        }
+    } catch (error) {
+        console.error('Login failed:', error);
+        alert('Login failed. Please try again.');  // Uses alert, not toast
+    }
+}
+----
+
+==== Impact
+
+* Poor user experience
+* No feedback during operations
+* Users don't know what's happening
+
+==== Recommended Fix
+
+Add loading states:
+
+[source,javascript]
+----
+async function handleLogin() {
+    try {
+        elements.loginBtn.disabled = true;
+        elements.loginBtn.textContent = 'Logging in...';
+        showLoadingOverlay();
+        
+        const result = await sendMessage('LOGIN_WITH_GOOGLE');
+        
+        if (result.success) {
+            updateAuthUI({ isAuthenticated: true, user: result.user });
+            await loadMemories();
+            showToast('Login successful');
+        }
+    } catch (error) {
+        console.error('Login failed:', error);
+        showToast('Login failed. Please try again.', 'error');
+    } finally {
+        elements.loginBtn.disabled = false;
+        elements.loginBtn.textContent = 'Login';
+        hideLoadingOverlay();
+    }
+}
+----
+
+=== Issue 18: No Cleanup on Page Navigation
+
+*File:* [`extension/src/content-scripts/core/button-injector.js`](extension/src/content-scripts/core/button-injector.js:45)  
+*Severity:* 🟠 HIGH  
+*Type:* Memory Leak
+
+==== Description
+
+No cleanup on page unload:
+
+[source,javascript]
+----
+setupObserver() {
+    this.observer = new MutationObserver((mutations) => {
+        if (!document.getElementById(this.buttonId)) {
+            this.retryAttempts = 0;
+            this.injectButton();
+        }
+    });
+    // No cleanup on page unload
+    this.observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+}
+----
+
+==== Impact
+
+* Memory leaks
+* Performance degradation
+* Multiple observers running
+
+==== Recommended Fix
+
+Add cleanup:
+
+[source,javascript]
+----
+setupObserver() {
+    this.observer = new MutationObserver((mutations) => {
+        if (!document.getElementById(this.buttonId)) {
+            this.retryAttempts = 0;
+            this.injectButton();
+        }
+    });
+    
+    this.observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+    
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        this.cleanup();
+    });
+}
+
+cleanup() {
+    if (this.observer) {
+        this.observer.disconnect();
+        this.observer = null;
+    }
+}
+----
+
+=== Issue 19: Infinite Retry Loop Without Backoff
+
+*File:* [`extension/src/content-scripts/core/button-injector.js`](extension/src/content-scripts/core/button-injector.js:70)  
+*Severity:* 🟠 HIGH  
+*Type:* Performance
+
+==== Description
+
+No exponential backoff:
+
+[source,javascript]
+----
+injectButton() {
+    if (!inputSelector) {
+        if (this.retryAttempts < this.maxRetries) {
+            this.retryAttempts++;
+            setTimeout(() => this.injectButton(), this.retryDelay);  // No backoff
+        }
+        return;
+    }
+}
+----
+
+==== Impact
+
+* Wasted resources
+* Poor performance
+* Can hang browser
+
+==== Recommended Fix
+
+Add exponential backoff:
+
+[source,javascript]
+----
+injectButton() {
+    if (!inputSelector) {
+        if (this.retryAttempts < this.maxRetries) {
+            this.retryAttempts++;
+            const delay = this.retryDelay * Math.pow(2, this.retryAttempts - 1);
+            setTimeout(() => this.injectButton(), delay);
+        }
+        return;
+    }
+}
+----
+
+=== Issue 20: No Error Handling in Capture Handler
+
+*File:* [`extension/src/content-scripts/core/button-injector.js`](extension/src/content-scripts/core/button-injector.js:95)  
+*Severity:* 🟠 HIGH  
+*Type:* Reliability
+
+==== Description
+
+No error handling:
+
+[source,javascript]
+----
+async handleCapture() {
+    try {
+        const button = document.getElementById(this.buttonId);
+        if (button) {
+            button.style.transform = 'scale(0.95)';
+            setTimeout(() => {
+                button.style.transform = 'scale(1)';
+            }, 150);
+        }
+        await chrome.runtime.sendMessage({
+            type: 'CAPTURE_AND_OPEN',
+            data: { url: window.location.href, title: document.title }
+        });
+        // No error handling if message fails
+    } catch (error) {
+        console.error('Context Bridge: Capture failed', error);  // Only logs
+    }
+}
+----
+
+==== Impact
+
+* Silent failures
+* Poor user experience
+* No feedback to user
+
+==== Recommended Fix
+
+Add error handling with user feedback:
+
+[source,javascript]
+----
+async handleCapture() {
+    try {
+        const button = document.getElementById(this.buttonId);
+        if (button) {
+            button.style.transform = 'scale(0.95)';
+            setTimeout(() => {
+                button.style.transform = 'scale(1)';
+            }, 150);
+        }
+        
+        const response = await chrome.runtime.sendMessage({
+            type: 'CAPTURE_AND_OPEN',
+            data: { url: window.location.href, title: document.title }
+        });
+        
+        if (response && response.success) {
+            this.showNotification('Context captured successfully');
+        } else {
+            throw new Error('Capture failed');
+        }
+    } catch (error) {
+        console.error('Context Bridge: Capture failed', error);
+        this.showNotification('Failed to capture context', 'error');
+    }
+}
+----
+
+=== Issue 21: Cache Has No Invalidation
+
+*File:* [`extension/src/content-scripts/core/parser.js`](extension/src/content-scripts/core/parser.js:35)  
+*Severity:* 🟠 HIGH  
+*Type:* Data Integrity
+
+==== Description
+
+No cache invalidation:
+
+[source,javascript]
+----
+async parse() {
+    const cacheKey = this.getCacheKey();
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
+        return { ...cached.data, fromCache: true };  // No cache invalidation
+    }
+}
+----
+
+==== Impact
+
+* Stale data returned
+* Incorrect context
+* Poor user experience
+
+==== Recommended Fix
+
+Implement cache invalidation:
+
+[source,javascript]
+----
+class ContextBridgeParser {
+    constructor() {
+        this.cache = new Map();
+        this.cacheTTL = 60000; // 1 minute cache
+        this.setupMutationObserver();
+    }
+    
+    setupMutationObserver() {
+        const observer = new MutationObserver(() => {
+            this.invalidateCache();
+        });
+        
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+    }
+    
+    invalidateCache() {
+        this.cache.clear();
+    }
+    
+    async parse() {
+        const cacheKey = this.getCacheKey();
+        const cached = this.cache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
+            return { ...cached.data, fromCache: true };
+        }
+        
+        const data = await this.parseFresh();
+        this.cache.set(cacheKey, { data, timestamp: Date.now() });
+        return data;
+    }
+}
+----
+
+=== Issue 22: No Error Handling in Adapter Calls
+
+*File:* [`extension/src/content-scripts/core/parser.js`](extension/src/content-scripts/core/parser.js:65)  
+*Severity:* 🟠 HIGH  
+*Type:* Reliability
+
+==== Description
+
+No try-catch:
+
+[source,javascript]
+----
+parseWithAdapter(adapter) {
+    const version = adapter.detectVersion();
+    const selectors = adapter.getSelectors(version);
+    const messages = adapter.parse(selectors);  // No try-catch
+}
+----
+
+==== Impact
+
+* Unhandled errors
+* Parser crashes
+* No fallback
+
+==== Recommended Fix
+
+Add error handling:
+
+[source,javascript]
+----
+parseWithAdapter(adapter) {
+    try {
+        const version = adapter.detectVersion();
+        const selectors = adapter.getSelectors(version);
+        const messages = adapter.parse(selectors);
+        return messages;
+    } catch (error) {
+        console.error('Adapter parsing failed:', error);
+        return null;
+    }
+}
+----
+
+=== Issue 23: Fragile Selectors in Platform Adapters
+
+*File:* [`extension/src/content-scripts/platforms/chatgpt.js`](extension/src/content-scripts/platforms/chatgpt.js:25)  
+*Severity:* 🟠 HIGH  
+*Type:* Maintainability
+
+==== Description
+
+Brittle selectors that break on UI changes:
+
+[source,javascript]
+----
+this.versions = {
+    'latest': {
+        selectors: {
+            container: '[data-testid="conversation-turn"]',  // Brittle - breaks on UI changes
+            message: '[data-message-author-role]',
+            role: 'data-message-author-role',
+            content: '.markdown',
+            input: '#prompt-textarea'
+        }
+    }
+};
+----
+
+==== Impact
+
+* Breaks on UI changes
+* Frequent maintenance
+* Poor reliability
+
+==== Recommended Fix
+
+Use semantic selectors with fallbacks:
+
+[source,javascript]
+----
+this.versions = {
+    'latest': {
+        selectors: {
+            container: [
+                '[data-testid="conversation-turn"]',
+                '.conversation-turn',
+                '[class*="conversation"]'
+            ],
+            message: [
+                '[data-message-author-role]',
+                '.message',
+                '[class*="message"]'
+            ],
+            content: [
+                '.markdown',
+                '.prose',
+                '[class*="content"]'
+            ],
+            input: [
+                '#prompt-textarea',
+                'textarea[placeholder*="Message"]',
+                'textarea'
+            ]
+        }
+    }
+};
+
+parse(selectors = null) {
+    const config = selectors || this.getSelectors(this.detectVersion());
+    
+    // Try each selector until one works
+    for (const selector of config.selectors.container) {
+        const containers = document.querySelectorAll(selector);
+        if (containers.length) {
+            return this.parseWithContainers(containers, config);
+        }
+    }
+    
+    return null;
+}
+----
+
+=== Issue 24: No Fallback for Selector Failures
+
+*File:* [`extension/src/content-scripts/platforms/chatgpt.js`](extension/src/content-scripts/platforms/chatgpt.js:55)  
+*Severity:* 🟠 HIGH  
+*Type:* Reliability
+
+==== Description
+
+No fallback, no error reporting:
+
+[source,javascript]
+----
+parse(selectors = null) {
+    const config = selectors || this.getSelectors(this.detectVersion());
+    const containers = document.querySelectorAll(config.selectors.container);
+    
+    if (!containers.length) {
+        return null;  // No fallback, no error reporting
+    }
+}
+----
+
+==== Impact
+
+* Silent failures
+* No user feedback
+* Difficult to debug
+
+==== Recommended Fix
+
+Add fallback and error reporting:
+
+[source,javascript]
+----
+parse(selectors = null) {
+    const config = selectors || this.getSelectors(this.detectVersion());
+    const containers = document.querySelectorAll(config.selectors.container);
+    
+    if (!containers.length) {
+        console.warn('No containers found with selector:', config.selectors.container);
+        
+        // Try fallback selectors
+        const fallbackContainers = this.tryFallbackSelectors();
+        if (fallbackContainers.length) {
+            return this.parseWithContainers(fallbackContainers, config);
+        }
+        
+        // Report error to user
+        this.showError('Unable to detect conversation. Please refresh the page.');
+        return null;
+    }
+    
+    return this.parseWithContainers(containers, config);
+}
+----
+
+=== Issue 25: Performance Issue - Queries Entire DOM
+
+*File:* [`extension/src/content-scripts/core/auto-discovery.js`](extension/src/content-scripts/core/auto-discovery.js:30)  
+*Severity:* 🟠 HIGH  
+*Type:* Performance
+
+==== Description
+
+Very expensive DOM query:
+
+[source,javascript]
+----
+async findTextCandidates() {
+    const allElements = await this.querySelectorAllDeep('*');  // Very expensive
+}
+----
+
+==== Impact
+
+* Slow performance
+* Browser hangs
+* Poor user experience
+
+==== Recommended Fix
+
+Add query timeout and limits:
+
+[source,javascript]
+----
+async findTextCandidates() {
+    const startTime = Date.now();
+    const timeout = 5000; // 5 second timeout
+    
+    const allElements = await this.querySelectorAllDeep('*', {
+        timeout,
+        maxElements: 1000
+    });
+    
+    if (Date.now() - startTime > timeout) {
+        console.warn('Text discovery timed out');
+    }
+    
+    return allElements;
+}
+----
+
+=== Issue 26: No Performance Limits in Auto-Discovery
+
+*File:* [`extension/src/content-scripts/core/auto-discovery.js`](extension/src/content-scripts/core/auto-discovery.js:45)  
+*Severity:* 🟠 HIGH  
+*Type:* Performance
+
+==== Description
+
+No timeout, can hang on large pages:
+
+[source,javascript]
+----
+querySelectorAllDeep(selector, root = document.body) {
+    const results = [];
+    const stack = [root];
+    
+    while (stack.length && results.length < this.maxCandidates) {
+        // No timeout, can hang on large pages
+        const node = stack.pop();
+    }
+}
+----
+
+==== Impact
+
+* Browser hangs
+* Poor performance
+* Memory issues
+
+==== Recommended Fix
+
+Add timeout and early termination:
+
+[source,javascript]
+----
+querySelectorAllDeep(selector, root = document.body, options = {}) {
+    const { timeout = 5000, maxElements = 1000 } = options;
+    const startTime = Date.now();
+    const results = [];
+    const stack = [root];
+    
+    while (stack.length && results.length < maxElements) {
+        // Check timeout
+        if (Date.now() - startTime > timeout) {
+            console.warn('Query timed out');
+            break;
+        }
+        
+        const node = stack.pop();
+        // ... rest of logic
+    }
+    
+    return results;
+}
+----
+
+=== Issue 27: Hardcoded OAuth Client ID
+
+*File:* [`extension/manifest.json`](extension/manifest.json:65)  
+*Severity:* 🟠 HIGH  
+*Type:* Security
+
+==== Description
+
+OAuth client ID exposed in manifest:
+
+[source,json]
+----
+"oauth2": {
+    "client_id": "799569526859-bc8smjo20jv7dih1vui7cd8k5v5i4l52.apps.googleusercontent.com",  // Exposed in manifest
+    "scopes": ["openid", "email", "profile"]
+}
+----
+
+==== Impact
+
+* OAuth client ID exposed to anyone
+* Security risk
+* Cannot rotate without code change
+
+==== Recommended Fix
+
+Move to environment variable:
+
+[source,json]
+----
+"oauth2": {
+    "client_id": "__OAUTH_CLIENT_ID__",
+    "scopes": ["openid", "email", "profile"]
+}
+----
+
+Use build process to replace placeholder:
+
+[source,javascript]
+----
+// build.js
+const fs = require('fs');
+const manifest = JSON.parse(fs.readFileSync('extension/manifest.json', 'utf8'));
+manifest.oauth2.client_id = process.env.OAUTH_CLIENT_ID;
+fs.writeFileSync('extension/manifest.json', JSON.stringify(manifest, null, 2));
+----
+
+=== Issue 28: Overly Broad Scripting Permissions
+
+*File:* [`extension/manifest.json`](extension/manifest.json:11)  
+*Severity:* 🟠 HIGH  
+*Type:* Security
+
+==== Description
+
+Very broad scripting permission:
+
+[source,json]
+----
+"permissions": [
+    "storage",
+    "sidePanel",
+    "activeTab",
+    "identity",
+    "scripting"  // Very broad - can inject anywhere
+]
+----
+
+==== Impact
+
+* Scripting permission allows injection on any site
+* Security risk
+* Privacy concern
+
+==== Recommended Fix
+
+Narrow permissions:
+
+[source,json]
+----
+"permissions": [
+    "storage",
+    "sidePanel",
+    "activeTab",
+    "identity"
+],
+"host_permissions": [
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*"
+]
+----
+
+=== Issue 29: No CSP (Content Security Policy)
+
+*File:* [`extension/manifest.json`](extension/manifest.json)  
+*Severity:* 🟠 HIGH  
+*Type:* Security
+
+==== Description
+
+Missing CSP header for security:
+
+[source,json]
+----
+// No CSP header for security
+----
+
+==== Impact
+
+* No CSP protection against XSS
+* Security vulnerability
+* Compliance issue
+
+==== Recommended Fix
+
+Add CSP:
+
+[source,json]
+----
+"content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+}
+----
+
+=== Issue 30: No Access Control on Shared Links
+
+*File:* [`backend/functions/share.py`](backend/functions/share.py:45)  
+*Severity:* 🟠 HIGH  
+*Type:* Security
+
+==== Description
+
+Anyone with share code can access:
+
+[source,python]
+----
+async def get_shared(share_code: str):
+    # Anyone with share code can access
+    shares = await cosmos.shares.query(query, parameters)
+    share = shares[0]
+    
+    # No rate limiting on share access
+    # Can be abused to enumerate shares
+    memories = []
+    for mid in share.get('memoryIds', []):
+        memory = await cosmos.memories.read(mid, share.get('ownerId'))
+----
+
+==== Impact
+
+* Unauthorized access
+* Share enumeration possible
+* No access control
+
+==== Recommended Fix
+
+Add access control:
+
+[source,python]
+----
+async def get_shared(share_code: str):
+    # Check rate limit
+    if not share_limiter.is_allowed(share_code):
+        return func.HttpResponse(
+            json.dumps({"error": "Too many requests"}),
+            status_code=429,
+            mimetype="application/json"
+        )
+    
+    # Get share
+    shares = await cosmos.shares.query(query, parameters)
+    if not shares:
+        return func.HttpResponse(
+            json.dumps({"error": "Share not found"}),
+            status_code=404,
+            mimetype="application/json"
+        )
+    
+    share = shares[0]
+    
+    # Check expiration
+    if share.get('expiresAt') and datetime.utcnow() > share['expiresAt']:
+        return func.HttpResponse(
+            json.dumps({"error": "Share has expired"}),
+            status_code=410,
+            mimetype="application/json"
+        )
+    
+    # Log access
+    log_memory_operation('share_access', 'anonymous', share['id'], {
+        'share_code': share_code,
+        'memory_count': len(share.get('memoryIds', []))
+    })
+    
+    # ... rest of logic
+----
+
+=== Issue 31: No Rate Limiting on Share Access
+
+*File:* [`backend/functions/share.py`](backend/functions/share.py:50)  
+*Severity:* 🟠 HIGH  
+*Type:* Security
+
+==== Description
+
+Can be abused to enumerate shares:
+
+[source,python]
+----
+# No rate limiting on share access
+# Can be abused to enumerate shares
+memories = []
+----
+
+==== Impact
+
+* Share enumeration possible
+* DoS vulnerability
+* Resource abuse
+
+==== Recommended Fix
+
+Add rate limiting (see Issue 30)
+
+=== Issue 32: Conflict Resolution Always Favors Server
+
+*File:* [`backend/functions/sync.py`](backend/functions/sync.py:85)  
+*Severity:* 🟠 HIGH  
+*Type:* Data Integrity
+
+==== Description
+
+Server wins - user loses local changes:
+
+[source,python]
+----
+if server_updated > local_updated:
+    # Server wins - user loses local changes
+    conflicts.append({
+        "memoryId": memory_id,
+        "local": local_memory,
+        "server": server_memory,
+        "resolution": "server_wins"  # No user choice
+    })
+----
+
+==== Impact
+
+* User data loss
+* Poor user experience
+* No conflict resolution UI
+
+==== Recommended Fix
+
+Implement three-way merge:
+
+[source,python]
+----
+def resolve_conflict(local_memory, server_memory, base_memory):
+    """Resolve conflicts using three-way merge."""
+    conflicts = []
+    
+    # Check for conflicts in each field
+    for field in ['title', 'content', 'tags']:
+        local_value = local_memory.get(field)
+        server_value = server_memory.get(field)
+        base_value = base_memory.get(field) if base_memory else None
+        
+        if local_value != server_value:
+            if local_value == base_value:
+                # Local unchanged, use server
+                local_memory[field] = server_value
+            elif server_value == base_value:
+                # Server unchanged, use local
+                pass  # Keep local value
+            else:
+                # Both changed - conflict
+                conflicts.append({
+                    'field': field,
+                    'local': local_value,
+                    'server': server_value,
+                    'base': base_value
+                })
+    
+    return local_memory, conflicts
+----
+
+=== Issue 33: No Conflict Resolution UI
+
+*File:* [`backend/functions/sync.py`](backend/functions/sync.py:100)  
+*Severity:* 🟠 HIGH  
+*Type:* User Experience
+
+==== Description
+
+Conflicts are just logged, not presented to user:
+
+[source,python]
+----
+return func.HttpResponse(
+    json.dumps({
+        "status": "success",
+        "data": {
+            "conflicts": conflicts  # User can't resolve
+        }
+    })
+)
+----
+
+==== Impact
+
+* Users can't resolve conflicts
+* Data loss possible
+* Poor user experience
+
+==== Recommended Fix
+
+Return conflicts for UI resolution:
+
+[source,python]
+----
+return func.HttpResponse(
+    json.dumps({
+        "status": "success",
+        "data": {
+            "synced": len(synced_memories),
+            "conflicts": conflicts,
+            "requires_resolution": len(conflicts) > 0
+        }
+    }),
+    mimetype="application/json"
+)
+----
+
+=== Issue 34: No Error Handling in Agent Execution
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py:45)  
+*Severity:* 🟠 HIGH  
+*Type:* Reliability
+
+==== Description
+
+No error handling, no timeout:
+
+[source,python]
+----
+context_bridge_pipeline = SequentialAgent(
+    name="ContextBridgePipeline",
+    description="Processes user context through validation and processing stages.",
+    sub_agents=[
+        scope_validator,
+        context_processor,
+    ],
+)  # No error handling, no timeout
+----
+
+==== Impact
+
+* Unhandled errors
+* No timeout protection
+* Cascading failures
+
+==== Recommended Fix
+
+Add error handling and timeout:
+
+[source,python]
+----
+import asyncio
+from typing import Optional
+
+async def execute_agent_with_timeout(agent, input_data: dict, timeout: int = 30) -> Optional[dict]:
+    """Execute agent with timeout and error handling."""
+    try:
+        result = await asyncio.wait_for(
+            agent.run(input_data),
+            timeout=timeout
+        )
+        return result
+    except asyncio.TimeoutError:
+        logger.error(f"Agent {agent.name} timed out after {timeout}s")
+        return None
+    except Exception as e:
+        logger.error(f"Agent {agent.name} failed: {e}")
+        return None
+----
+
+=== Issue 35: No Monitoring/Telemetry for Agents
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py:50)  
+*Severity:* 🟠 HIGH  
+*Type:* Observability
+
+==== Description
+
+No metrics collection for agent performance:
+
+[source,python]
+----
+# No metrics collection for agent performance
+----
+
+==== Impact
+
+* Cannot monitor agent performance
+* No visibility into failures
+* Difficult to debug
+
+==== Recommended Fix
+
+Add telemetry:
+
+[source,python]
+----
+import time
+from typing import Dict, Any
+
+class AgentMetrics:
+    """Collect metrics for agent execution."""
+    
+    def __init__(self):
+        self.execution_times: Dict[str, list] = {}
+        self.success_counts: Dict[str, int] = {}
+        self.failure_counts: Dict[str, int] = {}
+    
+    def record_execution(self, agent_name: str, duration: float, success: bool):
+        """Record agent execution metrics."""
+        if agent_name not in self.execution_times:
+            self.execution_times[agent_name] = []
+            self.success_counts[agent_name] = 0
+            self.failure_counts[agent_name] = 0
+        
+        self.execution_times[agent_name].append(duration)
+        
+        if success:
+            self.success_counts[agent_name] += 1
+        else:
+            self.failure_counts[agent_name] += 1
+    
+    def get_metrics(self, agent_name: str) -> Dict[str, Any]:
+        """Get metrics for an agent."""
+        times = self.execution_times.get(agent_name, [])
+        return {
+            'avg_duration': sum(times) / len(times) if times else 0,
+            'max_duration': max(times) if times else 0,
+            'min_duration': min(times) if times else 0,
+            'success_count': self.success_counts.get(agent_name, 0),
+            'failure_count': self.failure_counts.get(agent_name, 0),
+            'total_executions': len(times)
+        }
+
+metrics = AgentMetrics()
+
+async def execute_agent_with_metrics(agent, input_data: dict) -> Optional[dict]:
+    """Execute agent and collect metrics."""
+    start_time = time.time()
+    try:
+        result = await agent.run(input_data)
+        duration = time.time() - start_time
+        metrics.record_execution(agent.name, duration, True)
+        return result
+    except Exception as e:
+        duration = time.time() - start_time
+        metrics.record_execution(agent.name, duration, False)
+        logger.error(f"Agent {agent.name} failed: {e}")
+        return None
+----
+
+== MEDIUM Issues (28)
+
+=== Issue 36: All Security Settings Optional
+
+*File:* [`backend/config.py`](backend/config.py:25)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Configuration
+
+==== Description
+
+All security settings are optional:
+
+[source,python]
+----
+class Settings(BaseSettings):
+    cosmos_endpoint: Optional[str] = Field(default=None)  # Should be required in prod
+    encryption_key: Optional[SecretStr] = Field(default=None)  # Should be required
+    jwt_secret_key: Optional[SecretStr] = Field(default=None)  # Should be required
+----
+
+==== Impact
+
+* Production misconfiguration risk
+* Silent failures
+* Security vulnerabilities
+
+==== Recommended Fix
+
+Add environment-based validation:
+
+[source,python]
+----
+class Settings(BaseSettings):
+    cosmos_endpoint: Optional[str] = Field(default=None)
+    encryption_key: Optional[SecretStr] = Field(default=None)
+    jwt_secret_key: Optional[SecretStr] = Field(default=None)
+    
+    def validate_required_settings(self):
+        """Validate required settings for production."""
+        environment = os.environ.get('ENVIRONMENT', 'development')
+        
+        if environment == 'production':
+            if not self.cosmos_endpoint:
+                raise ValueError("COSMOS_ENDPOINT required in production")
+            if not self.encryption_key:
+                raise ValueError("ENCRYPTION_KEY required in production")
+            if not self.jwt_secret_key:
+                raise ValueError("JWT_SECRET_KEY required in production")
+----
+
+=== Issue 37: Debug Mode Defaults to True
+
+*File:* [`backend/config.py`](backend/config.py:40)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Configuration
+
+==== Description
+
+Debug mode defaults to True:
+
+[source,python]
+----
+debug: bool = Field(default=True)  # Should be False in production
+----
+
+==== Impact
+
+* Debug information exposed in production
+* Performance impact
+* Security risk
+
+==== Recommended Fix
+
+Default to False:
+
+[source,python]
+----
+debug: bool = Field(default=False)
+----
+
+=== Issue 38: No Dependency Injection
+
+*File:* Multiple files  
+*Severity:* 🟡 MEDIUM  
+*Type:* Architecture
+
+==== Description
+
+Services use global singletons:
+
+[source,python]
+----
+# No dependency injection - services use global singletons
+cosmos = CosmosService()
+encryption = EncryptionService()
+jwt_service = JWTService()
+----
+
+==== Impact
+
+* Tight coupling
+* Difficult to test
+* Poor flexibility
+
+==== Recommended Fix
+
+Implement dependency injection:
+
+[source,python]
+----
+# backend/services/service_container.py
+from typing import Dict, Any, Type, TypeVar, Optional
+
+T = TypeVar('T')
+
+class ServiceContainer:
+    """Simple dependency injection container."""
+    
+    def __init__(self):
+        self._services: Dict[Type, Any] = {}
+        self._singletons: Dict[Type, Any] = {}
+    
+    def register(self, interface: Type[T], implementation: Type[T], singleton: bool = True):
+        """Register a service implementation."""
+        if singleton:
+            self._singletons[interface] = implementation
+        else:
+            self._services[interface] = implementation
+    
+    def get(self, interface: Type[T]) -> T:
+        """Get a service instance."""
+        if interface in self._singletons:
+            if not isinstance(self._singletons[interface], interface):
+                self._singletons[interface] = self._singletons[interface]()
+            return self._singletons[interface]
+        
+        if interface in self._services:
+            return self._services[interface]()
+        
+        raise ValueError(f"Service not registered: {interface}")
+
+# Usage
+container = ServiceContainer()
+container.register(CosmosService, CosmosService)
+container.register(EncryptionService, EncryptionService)
+
+cosmos = container.get(CosmosService)
+----
+
+=== Issue 39: Tight Coupling Between Functions and Services
+
+*File:* Multiple files  
+*Severity:* 🟡 MEDIUM  
+*Type:* Architecture
+
+==== Description
+
+Functions directly import services:
+
+[source,python]
+----
+from services.cosmos import cosmos
+from services.encryption import encryption
+----
+
+==== Impact
+
+* Difficult to test
+* Tight coupling
+* Poor flexibility
+
+==== Recommended Fix
+
+Use dependency injection (see Issue 38)
+
+=== Issue 40: No Interface Definitions for Services
+
+*File:* Multiple files  
+*Severity:* 🟡 MEDIUM  
+*Type:* Architecture
+
+==== Description
+
+No abstract base classes or protocols:
+
+[source,python]
+----
+# No interface definitions for services
+class CosmosService:
+    # ...
+----
+
+==== Impact
+
+* No contracts
+* Difficult to mock
+* Poor documentation
+
+==== Recommended Fix
+
+Define interfaces:
+
+[source,python]
+----
+# backend/services/interfaces.py
+from abc import ABC, abstractmethod
+from typing import List, Optional, Dict, Any
+
+class StorageService(ABC):
+    """Interface for storage services."""
+    
+    @abstractmethod
+    async def create(self, item: Dict[str, Any]) -> str:
+        """Create a new item."""
+        pass
+    
+    @abstractmethod
+    async def read(self, item_id: str, partition_key: str) -> Optional[Dict[str, Any]]:
+        """Read an item by ID."""
+        pass
+    
+    @abstractmethod
+    async def update(self, item_id: str, partition_key: str, item: Dict[str, Any]) -> bool:
+        """Update an item."""
+        pass
+    
+    @abstractmethod
+    async def delete(self, item_id: str, partition_key: str) -> bool:
+        """Delete an item."""
+        pass
+
+class EncryptionService(ABC):
+    """Interface for encryption services."""
+    
+    @abstractmethod
+    def encrypt(self, plaintext: str) -> str:
+        """Encrypt plaintext."""
+        pass
+    
+    @abstractmethod
+    def decrypt(self, ciphertext: str) -> str:
+        """Decrypt ciphertext."""
+        pass
+----
+
+=== Issue 41: Missing Repository Pattern for Data Access
+
+*File:* Multiple files  
+*Severity:* 🟡 MEDIUM  
+*Type:* Architecture
+
+==== Description
+
+Direct database access in functions:
+
+[source,python]
+----
+# Direct database access in functions
+await cosmos.memories.create(memory)
+----
+
+==== Impact
+
+* Business logic mixed with data access
+* Difficult to test
+* Poor separation of concerns
+
+==== Recommended Fix
+
+Implement repository pattern:
+
+[source,python]
+----
+# backend/repositories/memory_repository.py
+from services.interfaces import StorageService
+from typing import List, Optional, Dict, Any
+
+class MemoryRepository:
+    """Repository for memory data access."""
+    
+    def __init__(self, storage: StorageService):
+        self._storage = storage
+    
+    async def create(self, user_id: str, memory_data: Dict[str, Any]) -> str:
+        """Create a new memory."""
+        memory = {
+            'id': str(uuid.uuid4()),
+            'userId': user_id,
+            'createdAt': datetime.utcnow().isoformat(),
+            'updatedAt': datetime.utcnow().isoformat(),
+            **memory_data
+        }
+        return await self._storage.create(memory)
+    
+    async def get_by_id(self, memory_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get a memory by ID."""
+        return await self._storage.read(memory_id, user_id)
+    
+    async def list_by_user(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """List all memories for a user."""
+        query = "SELECT * FROM c WHERE c.userId = @userId ORDER BY c.createdAt DESC"
+        parameters = [{"name": "@userId", "value": user_id}]
+        return await self._storage.query(query, parameters)
+    
+    async def update(self, memory_id: str, user_id: str, updates: Dict[str, Any]) -> bool:
+        """Update a memory."""
+        updates['updatedAt'] = datetime.utcnow().isoformat()
+        return await self._storage.update(memory_id, user_id, updates)
+    
+    async def delete(self, memory_id: str, user_id: str) -> bool:
+        """Delete a memory."""
+        return await self._storage.delete(memory_id, user_id)
+----
+
+=== Issue 42: JWT Secret Validation Too Lenient
+
+*File:* [`backend/services/jwt_service.py`](backend/services/jwt_service.py:25)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+Allows short secrets:
+
+[source,python]
+----
+def __init__(self, secret_key: Optional[str] = None):
+    self._secret_key = secret_key or os.environ.get('JWT_SECRET_KEY')
+    
+    if not self._secret_key:
+        logger.warning("No JWT secret key configured - JWT disabled")  # Only warning
+    elif len(self._secret_key) < 32:
+        logger.warning("JWT secret key is too short (< 32 chars)")  # Still allows it
+----
+
+==== Impact
+
+* Weak JWT secrets
+* Security risk
+* Brute force vulnerability
+
+==== Recommended Fix
+
+Enforce minimum length:
+
+[source,python]
+----
+def __init__(self, secret_key: Optional[str] = None):
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    self._secret_key = secret_key or os.environ.get('JWT_SECRET_KEY')
+    
+    if not self._secret_key:
+        if environment == 'production':
+            raise ValueError("JWT_SECRET_KEY required in production")
+        else:
+            logger.warning("No JWT secret key - JWT disabled for development")
+            self._secret_key = None
+            return
+    
+    if len(self._secret_key) < 32:
+        if environment == 'production':
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
+        else:
+            logger.warning("JWT secret key is too short (< 32 chars)")
+----
+
+=== Issue 43: No Key Rotation for JWT
+
+*File:* [`backend/services/jwt_service.py`](backend/services/jwt_service.py:50)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No token versioning or rotation support:
+
+[source,python]
+----
+def create_access_token(self, user_id: str, ...):
+    # No token versioning or rotation support
+    return self._create_token(...)
+----
+
+==== Impact
+
+* Cannot rotate keys
+* Security risk
+* No token revocation
+
+==== Recommended Fix
+
+Add token versioning:
+
+[source,python]
+----
+class JWTService:
+    def __init__(self, secret_key: Optional[str] = None):
+        self._secret_key = secret_key or os.environ.get('JWT_SECRET_KEY')
+        self._key_version = int(os.environ.get('JWT_KEY_VERSION', '1'))
+        self._algorithm = 'HS256'
+    
+    def create_access_token(self, user_id: str, email: str = None, name: str = None) -> str:
+        """Create an access token with version."""
+        payload = {
+            'sub': user_id,
+            'email': email,
+            'name': name,
+            'exp': datetime.utcnow() + timedelta(minutes=15),
+            'iat': datetime.utcnow(),
+            'version': self._key_version,
+            'type': 'access'
+        }
+        return jwt.encode(payload, self._secret_key, algorithm=self._algorithm)
+    
+    def verify_token(self, token: str) -> Optional[dict]:
+        """Verify a token and check version."""
+        try:
+            payload = jwt.decode(token, self._secret_key, algorithms=[self._algorithm])
+            
+            # Check key version
+            if payload.get('version') != self._key_version:
+                logger.warning(f"Token version mismatch: {payload.get('version')} != {self._key_version}")
+                return None
+            
+            return payload
+        except jwt.ExpiredSignatureError:
+            logger.warning("Token expired")
+            return None
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"Invalid token: {e}")
+            return None
+----
+
+=== Issue 44: No CORS Configuration
+
+*File:* Backend  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+Missing CORS configuration:
+
+[source,python]
+----
+# No CORS configuration
+----
+
+==== Impact
+
+* CSRF vulnerability
+* Cross-origin issues
+* Security risk
+
+==== Recommended Fix
+
+Add CORS middleware:
+
+[source,python]
+----
+# backend/middleware/cors.py
+from azure.functions import HttpRequest, HttpResponse
+import os
+
+def add_cors_headers(response: HttpResponse) -> HttpResponse:
+    """Add CORS headers to response."""
+    allowed_origins = os.environ.get('ALLOWED_ORIGINS', 'chrome-extension://*').split(',')
+    origin = None
+    
+    # Get origin from request if available
+    # Note: Azure Functions doesn't always provide origin in headers
+    
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    
+    return response
+
+def handle_cors_preflight(req: HttpRequest) -> HttpResponse:
+    """Handle CORS preflight requests."""
+    response = HttpResponse(status_code=204)
+    return add_cors_headers(response)
+----
+
+=== Issue 45: No Request Correlation/Tracing
+
+*File:* Backend  
+*Severity:* 🟡 MEDIUM  
+*Type:* Observability
+
+==== Description
+
+Cannot trace requests across functions:
+
+[source,python]
+----
+# No correlation IDs for request tracing
+----
+
+==== Impact
+
+* Difficult to debug issues
+* No request tracing
+* Poor observability
+
+==== Recommended Fix
+
+Add correlation IDs:
+
+[source,python]
+----
+# backend/middleware/correlation.py
+import uuid
+from azure.functions import HttpRequest
+import logging
+
+logger = logging.getLogger(__name__)
+
+def get_or_create_correlation_id(req: HttpRequest) -> str:
+    """Get or create correlation ID for request."""
+    # Check for existing correlation ID
+    correlation_id = req.headers.get('X-Correlation-ID') or req.headers.get('X-Request-ID')
+    
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())
+    
+    # Add to request context
+    if not hasattr(req, 'context'):
+        req.context = {}
+    req.context['correlation_id'] = correlation_id
+    
+    # Add to logger context
+    logger.info(f"Request with correlation ID: {correlation_id}", extra={
+        'correlation_id': correlation_id
+    })
+    
+    return correlation_id
+
+def get_correlation_id(req: HttpRequest) -> str:
+    """Get correlation ID from request."""
+    return getattr(req, 'context', {}).get('correlation_id', 'unknown')
+----
+
+=== Issue 46: No Rate Limiting on Authentication
+
+*File:* [`backend/middleware/auth.py`](backend/middleware/auth.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No rate limiting on authentication attempts:
+
+[source,python]
+----
+# No rate limiting on authentication attempts
+----
+
+==== Impact
+
+* Brute force attacks
+* Account lockout needed
+* Security risk
+
+==== Recommended Fix
+
+Add rate limiting (see Issue 11)
+
+=== Issue 47: No Account Lockout on Failed Attempts
+
+*File:* [`backend/middleware/auth.py`](backend/middleware/auth.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No account lockout mechanism:
+
+[source,python]
+----
+# No account lockout on failed attempts
+----
+
+==== Impact
+
+* Brute force vulnerability
+* No protection
+* Security risk
+
+==== Recommended Fix
+
+Implement account lockout:
+
+[source,python]
+----
+# backend/services/account_lockout.py
+import time
+from typing import Dict
+from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
+
+class AccountLockout:
+    """Account lockout service."""
+    
+    def __init__(self, max_attempts: int = 5, lockout_duration: int = 900):
+        self.max_attempts = max_attempts
+        self.lockout_duration = lockout_duration  # 15 minutes
+        self.attempts: Dict[str, list] = defaultdict(list)
+    
+    def record_failed_attempt(self, identifier: str) -> bool:
+        """Record a failed authentication attempt."""
+        now = time.time()
+        
+        # Clean old attempts
+        self.attempts[identifier] = [
+            attempt for attempt in self.attempts[identifier]
+            if now - attempt < self.lockout_duration
+        ]
+        
+        # Add new attempt
+        self.attempts[identifier].append(now)
+        
+        # Check if locked out
+        if len(self.attempts[identifier]) >= self.max_attempts:
+            logger.warning(f"Account locked out: {identifier}")
+            return True
+        
+        return False
+    
+    def is_locked_out(self, identifier: str) -> bool:
+        """Check if account is locked out."""
+        now = time.time()
+        
+        # Clean old attempts
+        self.attempts[identifier] = [
+            attempt for attempt in self.attempts[identifier]
+            if now - attempt < self.lockout_duration
+        ]
+        
+        return len(self.attempts[identifier]) >= self.max_attempts
+    
+    def get_remaining_attempts(self, identifier: str) -> int:
+        """Get remaining attempts before lockout."""
+        return self.max_attempts - len(self.attempts[identifier])
+    
+    def reset_attempts(self, identifier: str):
+        """Reset failed attempts after successful login."""
+        if identifier in self.attempts:
+            del self.attempts[identifier]
+
+lockout = AccountLockout()
+----
+
+=== Issue 48: No MFA Support
+
+*File:* [`backend/middleware/auth.py`](backend/middleware/auth.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No multi-factor authentication:
+
+[source,python]
+----
+# No MFA support
+----
+
+==== Impact
+
+* Reduced security
+* Compliance issue
+* Security risk
+
+==== Recommended Fix
+
+Add MFA support:
+
+[source,python]
+----
+# backend/services/mfa.py
+import pyotp
+import qrcode
+from io import BytesIO
+import base64
+
+class MFAService:
+    """Multi-factor authentication service."""
+    
+    def __init__(self):
+        self.issuer = "Context Bridge"
+    
+    def generate_secret(self) -> str:
+        """Generate a new TOTP secret."""
+        return pyotp.random_base32()
+    
+    def generate_qr_code(self, user_email: str, secret: str) -> str:
+        """Generate QR code for TOTP setup."""
+        totp = pyotp.TOTP(secret)
+        provisioning_uri = totp.provisioning_uri(
+            name=user_email,
+            issuer_name=self.issuer
+        )
+        
+        # Generate QR code
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(provisioning_uri)
+        qr.make(fit=True)
+        
+        img = qr.make_image(fill_color="black", back_color="white")
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        
+        return base64.b64encode(buffer.getvalue()).decode()
+    
+    def verify_token(self, secret: str, token: str) -> bool:
+        """Verify TOTP token."""
+        totp = pyotp.TOTP(secret)
+        return totp.verify(token)
+    
+    def generate_backup_codes(self, count: int = 10) -> list:
+        """Generate backup codes."""
+        import secrets
+        return [secrets.token_hex(4) for _ in range(count)]
+----
+
+=== Issue 49: No IP-Based Blocking for Repeated Failures
+
+*File:* [`backend/middleware/auth.py`](backend/middleware/auth.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No IP blocking mechanism:
+
+[source,python]
+----
+# No IP-based blocking for repeated failures
+----
+
+==== Impact
+
+* Brute force attacks
+* DoS vulnerability
+* Security risk
+
+==== Recommended Fix
+
+Add IP blocking:
+
+[source,python]
+----
+# backend/services/ip_blocklist.py
+import time
+from typing import Dict, Set
+from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
+
+class IPBlocklist:
+    """IP-based blocking service."""
+    
+    def __init__(self, max_attempts: int = 10, block_duration: int = 3600):
+        self.max_attempts = max_attempts
+        self.block_duration = block_duration  # 1 hour
+        self.attempts: Dict[str, list] = defaultdict(list)
+        self.blocked_ips: Dict[str, float] = {}
+    
+    def record_failed_attempt(self, ip: str) -> bool:
+        """Record a failed attempt from IP."""
+        now = time.time()
+        
+        # Check if already blocked
+        if self.is_blocked(ip):
+            return True
+        
+        # Clean old attempts
+        self.attempts[ip] = [
+            attempt for attempt in self.attempts[ip]
+            if now - attempt < self.block_duration
+        ]
+        
+        # Add new attempt
+        self.attempts[ip].append(now)
+        
+        # Check if should block
+        if len(self.attempts[ip]) >= self.max_attempts:
+            self.blocked_ips[ip] = now + self.block_duration
+            logger.warning(f"IP blocked: {ip}")
+            return True
+        
+        return False
+    
+    def is_blocked(self, ip: str) -> bool:
+        """Check if IP is blocked."""
+        if ip not in self.blocked_ips:
+            return False
+        
+        if time.time() > self.blocked_ips[ip]:
+            # Block expired
+            del self.blocked_ips[ip]
+            return False
+        
+        return True
+    
+    def unblock(self, ip: str):
+        """Unblock an IP."""
+        if ip in self.blocked_ips:
+            del self.blocked_ips[ip]
+        if ip in self.attempts:
+            del self.attempts[ip]
+
+ip_blocklist = IPBlocklist()
+----
+
+=== Issue 50: No Content Sanitization (XSS Prevention)
+
+*File:* [`backend/functions/memories.py`](backend/functions/memories.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No XSS prevention:
+
+[source,python]
+----
+# No content sanitization (XSS prevention)
+----
+
+==== Impact
+
+* XSS vulnerability
+* Security risk
+* Data corruption
+
+==== Recommended Fix
+
+Add sanitization (see Issue 10)
+
+=== Issue 51: No Memory Size Limits
+
+*File:* [`backend/functions/memories.py`](backend/functions/memories.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Resource Management
+
+==== Description
+
+No size limits on memories:
+
+[source,python]
+----
+# No memory size limits (max 10KB per memory)
+----
+
+==== Impact
+
+* Resource exhaustion
+* DoS vulnerability
+* Cost escalation
+
+==== Recommended Fix
+
+Add size limits:
+
+[source,python]
+----
+MAX_MEMORY_SIZE = 10240  # 10KB
+
+async def create_memory(user_id: str, req: func.HttpRequest):
+    body = require_json_body(req)
+    require_fields(body, ['title', 'content'])
+    
+    # Validate size
+    content_size = len(body['content'].encode('utf-8'))
+    if content_size > MAX_MEMORY_SIZE:
+        return func.HttpResponse(
+            json.dumps({"error": f"Content too large (max {MAX_MEMORY_SIZE} bytes)"}),
+            status_code=400,
+            mimetype="application/json"
+        )
+    
+    # ... rest of logic
+----
+
+=== Issue 52: No Soft Delete with Retention Period
+
+*File:* [`backend/functions/memories.py`](backend/functions/memories.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Data Management
+
+==== Description
+
+Hard delete without retention:
+
+[source,python]
+----
+# No soft delete with retention period
+----
+
+==== Impact
+
+* Data loss
+* No recovery
+* Compliance issue
+
+==== Recommended Fix
+
+Implement soft delete:
+
+[source,python]
+----
+async def delete_memory(user_id: str, memory_id: str, req: func.HttpRequest):
+    # Mark as deleted instead of removing
+    memory = await cosmos.memories.read(memory_id, user_id)
+    if not memory:
+        return func.HttpResponse(
+            json.dumps({"error": "Memory not found"}),
+            status_code=404,
+            mimetype="application/json"
+        )
+    
+    # Soft delete
+    memory['deleted'] = True
+    memory['deletedAt'] = datetime.utcnow().isoformat()
+    await cosmos.memories.update(memory_id, user_id, memory)
+    
+    # Log deletion
+    log_memory_operation('delete', user_id, memory_id)
+    
+    return func.HttpResponse(
+        json.dumps({"status": "deleted"}),
+        mimetype="application/json"
+    )
+----
+
+=== Issue 53: No Share Link Expiration Enforcement
+
+*File:* [`backend/functions/share.py`](backend/functions/share.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No expiration check:
+
+[source,python]
+----
+# No share link expiration enforcement
+----
+
+==== Impact
+
+* Old shares still accessible
+* Security risk
+* Compliance issue
+
+==== Recommended Fix
+
+Add expiration enforcement (see Issue 30)
+
+=== Issue 54: No Access Logging for Shared Content
+
+*File:* [`backend/functions/share.py`](backend/functions/share.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Compliance
+
+==== Description
+
+No logging of share access:
+
+[source,python]
+----
+# No access logging for shared content
+----
+
+==== Impact
+
+* No audit trail
+* Compliance issue
+* Security risk
+
+==== Recommended Fix
+
+Add access logging (see Issue 30)
+
+=== Issue 55: No Share Revocation
+
+*File:* [`backend/functions/share.py`](backend/functions/share.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+Cannot revoke shares:
+
+[source,python]
+----
+# No share revocation
+----
+
+==== Impact
+
+* Cannot revoke access
+* Security risk
+* Poor control
+
+==== Recommended Fix
+
+Add revocation:
+
+[source,python]
+----
+async def revoke_share(user_id: str, share_code: str, req: func.HttpRequest):
+    # Get share
+    shares = await cosmos.shares.query(
+        "SELECT * FROM c WHERE c.shareCode = @shareCode AND c.ownerId = @ownerId",
+        [{"name": "@shareCode", "value": share_code}, {"name": "@ownerId", "value": user_id}]
+    )
+    
+    if not shares:
+        return func.HttpResponse(
+            json.dumps({"error": "Share not found"}),
+            status_code=404,
+            mimetype="application/json"
+        )
+    
+    share = shares[0]
+    
+    # Mark as revoked
+    share['revoked'] = True
+    share['revokedAt'] = datetime.utcnow().isoformat()
+    await cosmos.shares.update(share['id'], user_id, share)
+    
+    # Log revocation
+    log_memory_operation('share_revoke', user_id, share['id'])
+    
+    return func.HttpResponse(
+        json.dumps({"status": "revoked"}),
+        mimetype="application/json"
+    )
+----
+
+=== Issue 56: No Password Protection for Sensitive Shares
+
+*File:* [`backend/functions/share.py`](backend/functions/share.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No password option:
+
+[source,python]
+----
+# No password protection for sensitive shares
+----
+
+==== Impact
+
+* Anyone can access
+* Security risk
+* Poor control
+
+==== Recommended Fix
+
+Add password protection:
+
+[source,python]
+----
+async def create_share(user_id: str, req: func.HttpRequest):
+    body = require_json_body(req)
+    require_fields(body, ['memoryIds'])
+    
+    # Optional password
+    password = body.get('password')
+    password_hash = None
+    if password:
+        import hashlib
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    share = {
+        'id': str(uuid.uuid4()),
+        'shareCode': secrets.token_urlsafe(8),
+        'ownerId': user_id,
+        'memoryIds': body['memoryIds'],
+        'passwordHash': password_hash,
+        'createdAt': datetime.utcnow().isoformat(),
+        'expiresAt': body.get('expiresAt')
+    }
+    
+    await cosmos.shares.create(share)
+    
+    return func.HttpResponse(
+        json.dumps({"shareCode": share['shareCode']}),
+        mimetype="application/json"
+    )
+
+async def get_shared(share_code: str, req: func.HttpRequest):
+    body = require_json_body(req)
+    password = body.get('password')
+    
+    # Get share
+    shares = await cosmos.shares.query(
+        "SELECT * FROM c WHERE c.shareCode = @shareCode",
+        [{"name": "@shareCode", "value": share_code}]
+    )
+    
+    if not shares:
+        return func.HttpResponse(
+            json.dumps({"error": "Share not found"}),
+            status_code=404,
+            mimetype="application/json"
+        )
+    
+    share = shares[0]
+    
+    # Check password if required
+    if share.get('passwordHash'):
+        if not password:
+            return func.HttpResponse(
+                json.dumps({"error": "Password required"}),
+                status_code=401,
+                mimetype="application/json"
+            )
+        
+        import hashlib
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        if password_hash != share['passwordHash']:
+            return func.HttpResponse(
+                json.dumps({"error": "Invalid password"}),
+                status_code=401,
+                mimetype="application/json"
+            )
+    
+    # ... rest of logic
+----
+
+=== Issue 57: No One-Time Use Option for Shares
+
+*File:* [`backend/functions/share.py`](backend/functions/share.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Security
+
+==== Description
+
+No one-time use option:
+
+[source,python]
+----
+# No one-time use option for shares
+----
+
+==== Impact
+
+* Limited control
+* Security risk
+* Poor flexibility
+
+==== Recommended Fix
+
+Add one-time use:
+
+[source,python]
+----
+async def create_share(user_id: str, req: func.HttpRequest):
+    body = require_json_body(req)
+    require_fields(body, ['memoryIds'])
+    
+    share = {
+        'id': str(uuid.uuid4()),
+        'shareCode': secrets.token_urlsafe(8),
+        'ownerId': user_id,
+        'memoryIds': body['memoryIds'],
+        'oneTimeUse': body.get('oneTimeUse', False),
+        'accessCount': 0,
+        'createdAt': datetime.utcnow().isoformat(),
+        'expiresAt': body.get('expiresAt')
+    }
+    
+    await cosmos.shares.create(share)
+    
+    return func.HttpResponse(
+        json.dumps({"shareCode": share['shareCode']}),
+        mimetype="application/json"
+    )
+
+async def get_shared(share_code: str, req: func.HttpRequest):
+    # Get share
+    shares = await cosmos.shares.query(
+        "SELECT * FROM c WHERE c.shareCode = @shareCode",
+        [{"name": "@shareCode", "value": share_code}]
+    )
+    
+    if not shares:
+        return func.HttpResponse(
+            json.dumps({"error": "Share not found"}),
+            status_code=404,
+            mimetype="application/json"
+        )
+    
+    share = shares[0]
+    
+    # Check one-time use
+    if share.get('oneTimeUse') and share.get('accessCount', 0) >= 1:
+        return func.HttpResponse(
+            json.dumps({"error": "Share has already been used"}),
+            status_code=410,
+            mimetype="application/json"
+        )
+    
+    # Increment access count
+    share['accessCount'] = share.get('accessCount', 0) + 1
+    await cosmos.shares.update(share['id'], share['ownerId'], share)
+    
+    # ... rest of logic
+----
+
+=== Issue 58: No Three-Way Merge for Conflicts
+
+*File:* [`backend/functions/sync.py`](backend/functions/sync.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Data Integrity
+
+==== Description
+
+Server always wins:
+
+[source,python]
+----
+# No three-way merge for conflicts
+----
+
+==== Impact
+
+* User data loss
+* Poor user experience
+* Data integrity issues
+
+==== Recommended Fix
+
+Implement three-way merge (see Issue 32)
+
+=== Issue 59: No Last-Write-Wins with Timestamp
+
+*File:* [`backend/functions/sync.py`](backend/functions/sync.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Data Integrity
+
+==== Description
+
+No timestamp-based resolution:
+
+[source,python]
+----
+# No last-write-wins with timestamp
+----
+
+==== Impact
+
+* Arbitrary resolution
+* Data loss
+* Poor user experience
+
+==== Recommended Fix
+
+Add timestamp-based resolution:
+
+[source,python]
+----
+def resolve_with_timestamp(local_memory, server_memory):
+    """Resolve conflicts using last-write-wins."""
+    local_updated = datetime.fromisoformat(local_memory['updatedAt'])
+    server_updated = datetime.fromisoformat(server_memory['updatedAt'])
+    
+    if server_updated > local_updated:
+        # Server wins
+        return server_memory, 'server_wins'
+    else:
+        # Local wins
+        return local_memory, 'local_wins'
+----
+
+=== Issue 60: No Manual Conflict Resolution
+
+*File:* [`backend/functions/sync.py`](backend/functions/sync.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* User Experience
+
+==== Description
+
+No user choice:
+
+[source,python]
+----
+# No manual conflict resolution
+----
+
+==== Impact
+
+* User can't choose
+* Data loss
+* Poor user experience
+
+==== Recommended Fix
+
+Add manual resolution endpoint:
+
+[source,python]
+----
+async def resolve_conflict(user_id: str, req: func.HttpRequest):
+    body = require_json_body(req)
+    require_fields(body, ['memoryId', 'resolution'])
+    
+    resolution = body['resolution']  # 'local' or 'server'
+    memory_id = body['memoryId']
+    
+    # Get both versions
+    local_memory = await cosmos.memories.read(memory_id, user_id)
+    server_memory = await cosmos.memories.read(memory_id, user_id)
+    
+    if resolution == 'local':
+        # Keep local version
+        await cosmos.memories.update(memory_id, user_id, local_memory)
+    else:
+        # Keep server version
+        await cosmos.memories.update(memory_id, user_id, server_memory)
+    
+    return func.HttpResponse(
+        json.dumps({"status": "resolved", "resolution": resolution}),
+        mimetype="application/json"
+    )
+----
+
+=== Issue 61: No Sync Status Indicators
+
+*File:* [`backend/functions/sync.py`](backend/functions/sync.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* User Experience
+
+==== Description
+
+No status feedback:
+
+[source,python]
+----
+# No sync status indicators
+----
+
+==== Impact
+
+* Poor user experience
+* No feedback
+* Confusion
+
+==== Recommended Fix
+
+Add status indicators:
+
+[source,python]
+----
+return func.HttpResponse(
+    json.dumps({
+        "status": "success",
+        "data": {
+            "synced": len(synced_memories),
+            "conflicts": conflicts,
+            "requires_resolution": len(conflicts) > 0,
+            "sync_status": "completed" if not conflicts else "needs_resolution"
+        }
+    }),
+    mimetype="application/json"
+)
+----
+
+=== Issue 62: No Conflict Prevention (Optimistic Locking)
+
+*File:* [`backend/functions/sync.py`](backend/functions/sync.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Data Integrity
+
+==== Description
+
+No locking mechanism:
+
+[source,python]
+----
+# No conflict prevention (optimistic locking)
+----
+
+==== Impact
+
+* Conflicts occur
+* Data loss
+* Poor user experience
+
+==== Recommended Fix
+
+Add optimistic locking:
+
+[source,python]
+----
+async def update_memory(user_id: str, memory_id: str, req: func.HttpRequest):
+    body = require_json_body(req)
+    
+    # Get current version
+    memory = await cosmos.memories.read(memory_id, user_id)
+    if not memory:
+        return func.HttpResponse(
+            json.dumps({"error": "Memory not found"}),
+            status_code=404,
+            mimetype="application/json"
+        )
+    
+    # Check version
+    if body.get('version') != memory.get('version'):
+        return func.HttpResponse(
+            json.dumps({
+                "error": "Conflict",
+                "current_version": memory.get('version'),
+                "your_version": body.get('version')
+            }),
+            status_code=409,
+            mimetype="application/json"
+        )
+    
+    # Update with new version
+    body['version'] = memory.get('version', 0) + 1
+    body['updatedAt'] = datetime.utcnow().isoformat()
+    
+    await cosmos.memories.update(memory_id, user_id, body)
+    
+    return func.HttpResponse(
+        json.dumps({"status": "updated", "version": body['version']}),
+        mimetype="application/json"
+    )
+----
+
+=== Issue 63: No Timeout Handling for Agent Execution
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Reliability
+
+==== Description
+
+No timeout protection:
+
+[source,python]
+----
+# No timeout handling for agent execution
+----
+
+==== Impact
+
+* Agents can hang
+* Cascading failures
+* Poor reliability
+
+==== Recommended Fix
+
+Add timeout (see Issue 34)
+
+=== Issue 64: No Retry Logic with Exponential Backoff
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py)  
+*Severity:* 🟡 MEDIUM  
+*Type:* Reliability
+
+==== Description
+
+No retry mechanism:
+
+[source,python]
+----
+# No retry logic with exponential backoff
+----
+
+==== Impact
+
+* Transient failures not handled
+* Poor reliability
+* Poor user experience
+
+==== Recommended Fix
+
+Add retry logic:
+
+[source,python]
+----
+import asyncio
+from typing import Optional, Callable
+
+async def retry_with_backoff(
+    func: Callable,
+    max_retries: int = 3,
+    base_delay: float = 1.0
+) -> Optional[any]:
+    """Retry function with exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            return await func()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            
+            delay = base_delay * (2 ** attempt)
+            logger.warning(f"Attempt {attempt + 1} failed, retrying in {delay}s: {e}")
+            await asyncio.sleep(delay)
+    
+    return None
+----
+
+== LOW Issues (14)
+
+=== Issue 65: No Performance Metrics Collection
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py)  
+*Severity:* 🟢 LOW  
+*Type:* Observability
+
+==== Description
+
+No metrics collection:
+
+[source,python]
+----
+# No performance metrics collection
+----
+
+==== Impact
+
+* Cannot monitor performance
+* No optimization data
+* Poor observability
+
+==== Recommended Fix
+
+Add metrics (see Issue 35)
+
+=== Issue 66: No Agent Health Checks
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py)  
+*Severity:* 🟢 LOW  
+*Type:* Reliability
+
+==== Description
+
+No health monitoring:
+
+[source,python]
+----
+# No agent health checks
+----
+
+==== Impact
+
+* Cannot detect failures
+* Poor reliability
+* Difficult to debug
+
+==== Recommended Fix
+
+Add health checks:
+
+[source,python]
+----
+class AgentHealthChecker:
+    """Health checker for agents."""
+    
+    def __init__(self):
+        self.health_status: Dict[str, dict] = {}
+    
+    async def check_health(self, agent) -> dict:
+        """Check health of an agent."""
+        start_time = time.time()
+        
+        try:
+            # Run simple test
+            result = await asyncio.wait_for(
+                agent.run({"test": True}),
+                timeout=5
+            )
+            
+            duration = time.time() - start_time
+            
+            self.health_status[agent.name] = {
+                'healthy': True,
+                'last_check': datetime.utcnow().isoformat(),
+                'response_time': duration,
+                'error': None
+            }
+            
+            return self.health_status[agent.name]
+        except Exception as e:
+            duration = time.time() - start_time
+            
+            self.health_status[agent.name] = {
+                'healthy': False,
+                'last_check': datetime.utcnow().isoformat(),
+                'response_time': duration,
+                'error': str(e)
+            }
+            
+            return self.health_status[agent.name]
+    
+    def get_all_health(self) -> Dict[str, dict]:
+        """Get health status of all agents."""
+        return self.health_status
+
+health_checker = AgentHealthChecker()
+----
+
+=== Issue 67: No Circuit Breaker Pattern
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py)  
+*Severity:* 🟢 LOW  
+*Type:* Reliability
+
+==== Description
+
+No circuit breaker:
+
+[source,python]
+----
+# No circuit breaker pattern for cascading failures
+----
+
+==== Impact
+
+* Cascading failures
+* Poor reliability
+* System instability
+
+==== Recommended Fix
+
+Add circuit breaker:
+
+[source,python]
+----
+import time
+from enum import Enum
+
+class CircuitState(Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+class CircuitBreaker:
+    """Circuit breaker pattern for preventing cascading failures."""
+    
+    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.last_failure_time = None
+    
+    def record_failure(self):
+        """Record a failure."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        
+        if self.failure_count >= self.failure_threshold:
+            self.state = CircuitState.OPEN
+            logger.warning(f"Circuit breaker opened after {self.failure_count} failures")
+    
+    def record_success(self):
+        """Record a success."""
+        self.failure_count = 0
+        if self.state == CircuitState.HALF_OPEN:
+            self.state = CircuitState.CLOSED
+            logger.info("Circuit breaker closed")
+    
+    def can_execute(self) -> bool:
+        """Check if execution is allowed."""
+        if self.state == CircuitState.CLOSED:
+            return True
+        
+        if self.state == CircuitState.OPEN:
+            if time.time() - self.last_failure_time > self.timeout:
+                self.state = CircuitState.HALF_OPEN
+                logger.info("Circuit breaker half-open")
+                return True
+            return False
+        
+        return True
+
+circuit_breaker = CircuitBreaker()
+----
+
+=== Issue 68: No Request/Response Logging for Debugging
+
+*File:* [`backend/agents/agent.py`](backend/agents/agent.py)  
+*Severity:* 🟢 LOW  
+*Type:* Debugging
+
+==== Description
+
+No request logging:
+
+[source,python]
+----
+# No request/response logging for debugging
+----
+
+==== Impact
+
+* Difficult to debug
+* Poor observability
+* No audit trail
+
+==== Recommended Fix
+
+Add logging:
+
+[source,python]
+----
+async def execute_agent_with_logging(agent, input_data: dict) -> Optional[dict]:
+    """Execute agent with request/response logging."""
+    correlation_id = str(uuid.uuid4())
+    
+    logger.info(
+        f"Agent execution started: {agent.name}",
+        extra={
+            'agent_name': agent.name,
+            'correlation_id': correlation_id,
+            'input': input_data
+        }
+    )
+    
+    try:
+        result = await agent.run(input_data)
+        
+        logger.info(
+            f"Agent execution completed: {agent.name}",
+            extra={
+                'agent_name': agent.name,
+                'correlation_id': correlation_id,
+                'success': True,
+                'output': result
+            }
+        )
+        
+        return result
+    except Exception as e:
+        logger.error(
+            f"Agent execution failed: {agent.name}",
+            extra={
+                'agent_name': agent.name,
+                'correlation_id': correlation_id,
+                'success': False,
+                'error': str(e)
+            }
+        )
+        return None
+----
+
+=== Issue 69: No Cache Size Limits
+
+*File:* [`extension/src/content-scripts/core/parser.js`](extension/src/content-scripts/core/parser.js)  
+*Severity:* 🟢 LOW  
+*Type:* Memory Management
+
+==== Description
+
+Unbounded cache:
+
+[source,javascript]
+----
+// No cache size limits
+----
+
+==== Impact
+
+* Memory leaks
+* Performance degradation
+* Browser crashes
+
+==== Recommended Fix
+
+Add cache limits:
+
+[source,javascript]
+----
+class ContextBridgeParser {
+    constructor() {
+        this.cache = new Map();
+        this.cacheTTL = 60000; // 1 minute cache
+        this.maxCacheSize = 100; // Max 100 items
+    }
+    
+    async parse() {
+        const cacheKey = this.getCacheKey();
+        const cached = this.cache.get(cacheKey);
+        
+        if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
+            return { ...cached.data, fromCache: true };
+        }
+        
+        const data = await this.parseFresh();
+        
+        // Enforce cache size limit
+        if (this.cache.size >= this.maxCacheSize) {
+            // Remove oldest entry
+            const oldestKey = this.cache.keys().next().value;
+            this.cache.delete(oldestKey);
+        }
+        
+        this.cache.set(cacheKey, { data, timestamp: Date.now() });
+        return data;
+    }
+}
+----
+
+=== Issue 70: No Cache Warming Strategy
+
+*File:* [`extension/src/content-scripts/core/parser.js`](extension/src/content-scripts/core/parser.js)  
+*Severity:* 🟢 LOW  
+*Type:* Performance
+
+==== Description
+
+No proactive caching:
+
+[source,javascript]
+----
+// No cache warming strategy
+----
+
+==== Impact
+
+* Cold starts
+* Poor performance
+* Poor user experience
+
+==== Recommended Fix
+
+Add cache warming:
+
+[source,javascript]
+----
+class ContextBridgeParser {
+    constructor() {
+        this.cache = new Map();
+        this.cacheTTL = 60000;
+        this.warmedUp = false;
+    }
+    
+    async warmUpCache() {
+        """Warm up cache with common queries."""
+        if (this.warmedUp) return;
+        
+        try {
+            // Parse current page
+            await this.parse();
+            this.warmedUp = true;
+            logger.info('Cache warmed up');
+        } catch (error) {
+            logger.error('Cache warm-up failed:', error);
+        }
+    }
+    
+    async parse() {
+        // Ensure cache is warmed
+        if (!this.warmedUp) {
+            await this.warmUpCache();
+        }
+        
+        // ... rest of parse logic
+    }
+}
+----
+
+=== Issue 71: No Selector Health Monitoring
+
+*File:* [`extension/src/content-scripts/platforms/chatgpt.js`](extension/src/content-scripts/platforms/chatgpt.js)  
+*Severity:* 🟢 LOW  
+*Type:* Maintainability
+
+==== Description
+
+No health checks:
+
+[source,javascript]
+----
+// No selector health monitoring
+----
+
+==== Impact
+
+* Silent failures
+* Difficult to debug
+* Poor reliability
+
+==== Recommended Fix
+
+Add health monitoring:
+
+[source,javascript]
+----
+class ChatGPTAdapter {
+    constructor() {
+        this.versions = { /* ... */ };
+        this.healthStatus = {
+            selectors: {},
+            lastCheck: null
+        };
+    }
+    
+    checkSelectorHealth() {
+        """Check if selectors are working."""
+        const config = this.getSelectors(this.detectVersion());
+        const health = {};
+        
+        for (const [key, selector] of Object.entries(config.selectors)) {
+            const elements = document.querySelectorAll(selector);
+            health[key] = {
+                selector,
+                found: elements.length > 0,
+                count: elements.length
+            };
+        }
+        
+        this.healthStatus = {
+            selectors: health,
+            lastCheck: Date.now()
+        };
+        
+        return health;
+    }
+    
+    getHealthReport() {
+        """Get health report for selectors."""
+        if (!this.healthStatus.lastCheck) {
+            this.checkSelectorHealth();
+        }
+        
+        const report = {
+            platform: 'ChatGPT',
+            timestamp: this.healthStatus.lastCheck,
+            healthy: true,
+            issues: []
+        };
+        
+        for (const [key, status] of Object.entries(this.healthStatus.selectors)) {
+            if (!status.found) {
+                report.healthy = false;
+                report.issues.push({
+                    selector: key,
+                    selectorValue: status.selector,
+                    issue: 'No elements found'
+                });
+            }
+        }
+        
+        return report;
+    }
+}
+----
+
+=== Issue 72: No Progressive Loading
+
+*File:* [`extension/src/content-scripts/core/auto-discovery.js`](extension/src/content-scripts/core/auto-discovery.js)  
+*Severity:* 🟢 LOW  
+*Type:* Performance
+
+==== Description
+
+No lazy loading:
+
+[source,javascript]
+----
+// No progressive loading
+----
+
+==== Impact
+
+* Slow initial load
+* Poor performance
+* Poor user experience
+
+==== Recommended Fix
+
+Add progressive loading:
+
+[source,javascript]
+----
+class AutoDiscoveryParser {
+    constructor() {
+        this.maxCandidates = 100;
+        this.batchSize = 20;
+    }
+    
+    async findTextCandidates() {
+        const candidates = [];
+        const startTime = Date.now();
+        const timeout = 5000;
+        
+        // Load in batches
+        for (let i = 0; i < this.maxCandidates; i += this.batchSize) {
+            if (Date.now() - startTime > timeout) {
+                console.warn('Discovery timed out');
+                break;
+            }
+            
+            const batch = await this.findBatch(i, this.batchSize);
+            candidates.push(...batch);
+            
+            // Yield to main thread
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        
+        return candidates;
+    }
+    
+    async findBatch(offset, limit) {
+        """Find a batch of candidates."""
+        // ... batch logic
+    }
+}
+----
+
+=== Issue 73: No IntersectionObserver for Lazy Loading
+
+*File:* [`extension/src/content-scripts/core/auto-discovery.js`](extension/src/content-scripts/core/auto-discovery.js)  
+*Severity:* 🟢 LOW  
+*Type:* Performance
+
+==== Description
+
+No lazy loading:
+
+[source,javascript]
+----
+// Use IntersectionObserver for lazy loading
+----
+
+==== Impact
+
+* Poor performance
+* Unnecessary processing
+* Battery drain
+
+==== Recommended Fix
+
+Add IntersectionObserver:
+
+[source,javascript]
+----
+class LazyDiscoveryParser {
+    constructor() {
+        this.observer = null;
+        this.processedElements = new Set();
+    }
+    
+    setupIntersectionObserver() {
+        """Set up intersection observer for lazy loading."""
+        this.observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        this.processElement(entry.target);
+                        this.observer.unobserve(entry.target);
+                    }
+                });
+            },
+            {
+                rootMargin: '100px',
+                threshold: 0.1
+            }
+        );
+    }
+    
+    observeElements(elements) {
+        """Observe elements for lazy processing."""
+        elements.forEach(element => {
+            if (!this.processedElements.has(element)) {
+                this.observer.observe(element);
+            }
+        });
+    }
+    
+    processElement(element) {
+        """Process an element when it comes into view."""
+        this.processedElements.add(element);
+        // ... processing logic
+    }
+}
+----
+
+=== Issue 74: No Performance Budget Monitoring
+
+*File:* [`extension/src/content-scripts/core/auto-discovery.js`](extension/src/content-scripts/core/auto-discovery.js)  
+*Severity:* 🟢 LOW  
+*Type:* Performance
+
+==== Description
+
+No budget tracking:
+
+[source,javascript]
+----
+// No performance budget monitoring
+----
+
+==== Impact
+
+* Performance degradation
+* Poor user experience
+* Difficult to optimize
+
+==== Recommended Fix
+
+Add performance budget:
+
+[source,javascript]
+----
+class PerformanceMonitor {
+    constructor() {
+        this.budgets = {
+            discovery: 5000, // 5 seconds
+            parsing: 1000, // 1 second
+            rendering: 500 // 500ms
+        };
+        this.metrics = {};
+    }
+    
+    startTimer(operation) {
+        """Start timing an operation."""
+        this.metrics[operation] = {
+            start: performance.now(),
+            end: null,
+            duration: null,
+            withinBudget: null
+        };
+    }
+    
+    endTimer(operation) {
+        """End timing an operation."""
+        if (!this.metrics[operation]) return;
+        
+        this.metrics[operation].end = performance.now();
+        this.metrics[operation].duration = 
+            this.metrics[operation].end - this.metrics[operation].start;
+        
+        const budget = this.budgets[operation];
+        this.metrics[operation].withinBudget = 
+            this.metrics[operation].duration <= budget;
+        
+        if (!this.metrics[operation].withinBudget) {
+            console.warn(
+                `Performance budget exceeded for ${operation}: ` +
+                `${this.metrics[operation].duration}ms > ${budget}ms`
+            );
+        }
+    }
+    
+    getReport() {
+        """Get performance report."""
+        return {
+            budgets: this.budgets,
+            metrics: this.metrics,
+            summary: {
+                totalOperations: Object.keys(this.metrics).length,
+                withinBudget: Object.values(this.metrics)
+                    .filter(m => m.withinBudget).length,
+                overBudget: Object.values(this.metrics)
+                    .filter(m => !m.withinBudget).length
+            }
+        };
+    }
+}
+
+const performanceMonitor = new PerformanceMonitor();
+----
+
+=== Issue 75: No Early Termination on Sufficient Results
+
+*File:* [`extension/src/content-scripts/core/auto-discovery.js`](extension/src/content-scripts/core/auto-discovery.js)  
+*Severity:* 🟢 LOW  
+*Type:* Performance
+
+==== Description
+
+Always processes all:
+
+[source,javascript]
+----
+// No early termination on sufficient results
+----
+
+==== Impact
+
+* Wasted resources
+* Poor performance
+* Poor user experience
+
+==== Recommended Fix
+
+Add early termination:
+
+[source,javascript]
+----
+class AutoDiscoveryParser {
+    constructor() {
+        this.maxCandidates = 100;
+        this.sufficientResults = 20; // Stop if we find 20 good candidates
+        this.confidenceThreshold = 0.8;
+    }
+    
+    async findTextCandidates() {
+        const candidates = [];
+        const startTime = Date.now();
+        const timeout = 5000;
+        
+        const allElements = await this.querySelectorAllDeep('*', {
+            timeout,
+            maxElements: this.maxCandidates
+        });
+        
+        for (const element of allElements) {
+            // Check timeout
+            if (Date.now() - startTime > timeout) {
+                console.warn('Discovery timed out');
+                break;
+            }
+            
+            // Check if we have enough results
+            if (candidates.length >= this.sufficientResults) {
+                console.log(`Found sufficient results: ${candidates.length}`);
+                break;
+            }
+            
+            // Score the element
+            const score = this.scoreElement(element);
+            if (score >= this.confidenceThreshold) {
+                candidates.push({
+                    element,
+                    score,
+                    text: element.textContent
+                });
+            }
+        }
+        
+        return candidates;
+    }
+    
+    scoreElement(element) {
+        """Score an element's likelihood of being a text candidate."""
+        let score = 0;
+        
+        // Check for text content
+        if (element.textContent && element.textContent.length > 50) {
+            score += 0.3;
+        }
+        
+        // Check for semantic tags
+        if (['p', 'div', 'span', 'article'].includes(element.tagName.toLowerCase())) {
+            score += 0.2;
+        }
+        
+        // Check for visible
+        if (element.offsetParent !== null) {
+            score += 0.3;
+        }
+        
+        // Check for class names
+        if (element.className && /text|content|message/.test(element.className)) {
+            score += 0.2;
+        }
+        
+        return score;
+    }
+}
+----
+
+== Summary by Category
+
+=== Security Issues
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| CRITICAL | 8 | In-memory storage, Optional encryption, DEV_MODE bypass, Mock auth, Insecure tokens, Anonymous auth, Legacy header, No input validation |
+| HIGH | 8 | Hardcoded OAuth, Broad permissions, No CSP, No access control, No rate limiting, No sanitization, No share controls, No error handling |
+| MEDIUM | 10 | Optional settings, JWT validation, No CORS, No rate limiting, No lockout, No MFA, No IP blocking, No sanitization, No size limits, No password protection |
+| LOW | 0 | - |
+| *Total* | *26* | |
+
+=== Code Quality Issues
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| CRITICAL | 1 | Logging non-functional |
+| HIGH | 6 | Hardcoded API, No error handling, No retry, Deprecated API, No loading states, Fragile selectors |
+| MEDIUM | 8 | No DI, Tight coupling, No interfaces, No repository, No key rotation, No soft delete, No conflict resolution, No timeout |
+| LOW | 6 | No metrics, No health checks, No circuit breaker, No logging, No cache limits, No monitoring |
+| *Total* | *21* | |
+
+=== Architecture Issues
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| CRITICAL | 0 | - |
+| HIGH | 2 | No cleanup, No fallback |
+| MEDIUM | 4 | No DI, Tight coupling, No interfaces, No repository |
+| LOW | 0 | - |
+| *Total* | *6* | |
+
+=== Observability Issues
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| CRITICAL | 1 | Logging non-functional |
+| HIGH | 1 | No monitoring |
+| MEDIUM | 2 | No correlation, No audit logging |
+| LOW | 4 | No metrics, No health checks, No logging, No monitoring |
+| *Total* | *8* | |
+
+=== Performance Issues
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| CRITICAL | 0 | - |
+| HIGH | 3 | No backoff, Expensive queries, No limits |
+| MEDIUM | 0 | - |
+| LOW | 4 | No cache limits, No warming, No progressive loading, No early termination |
+| *Total* | *7* | |
+
+=== User Experience Issues
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| CRITICAL | 0 | - |
+| HIGH | 3 | No loading states, No conflict UI, No feedback |
+| MEDIUM | 3 | No conflict resolution, No sync status, No manual resolution |
+| LOW | 0 | - |
+| *Total* | *6* | |
+
+=== Reliability Issues
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| CRITICAL | 0 | - |
+| HIGH | 5 | No error handling, No retry, No error handling, No error handling, No error handling |
+| MEDIUM | 2 | No timeout, No retry |
+| LOW | 2 | No health checks, No circuit breaker |
+| *Total* | *9* | |
+
+== Immediate Action Items
+
+=== Phase 1: Critical Security Fixes (Week 1)
+
+**Goal:** Fix all critical security vulnerabilities
+
+*Day 1-2: Backend Security*
+
+* [ ] Remove in-memory storage fallback (Issue 2)
+* [ ] Enforce encryption in production (Issue 3)
+* [ ] Remove DEV_MODE bypass (Issue 4)
+* [ ] Change Azure Functions auth level (Issue 7)
+* [ ] Remove legacy header support (Issue 8)
+* [ ] Remove mock authentication (Issue 5)
+* [ ] Remove insecure token fallback (Issue 6)
+
+*Day 3-4: Extension Security*
+
+* [ ] Narrow scripting permissions (Issue 28)
+* [ ] Add CSP headers (Issue 29)
+* [ ] Move OAuth ID to environment (Issue 27)
+* [ ] Implement input sanitization (Issue 15)
+
+*Day 5: Testing*
+
+* [ ] Security audit
+* [ ] Penetration testing
+* [ ] Code review fixes
+
+=== Phase 2: Logging & Observability (Week 2)
+
+**Goal:** Implement comprehensive logging
+
+*Day 1-2: Logging Infrastructure*
+
+* [ ] Configure structured logging (Issue 1)
+* [ ] Implement correlation IDs (Issue 45)
+* [ ] Add audit logging (Issue 9)
+
+*Day 3-4: Monitoring*
+
+* [ ] Integrate Azure Application Insights
+* [ ] Set up performance metrics (Issue 65)
+* [ ] Configure alerting
+
+*Day 5: Documentation*
+
+* [ ] Update runbooks
+* [ ] Create troubleshooting guide
+* [ ] Document logging practices
+
+=== Phase 3: Code Quality Improvements (Week 3)
+
+**Goal:** Improve code quality and reliability
+
+*Day 1-2: Error Handling*
+
+* [ ] Add try-catch to all async operations (Issues 13, 20, 22)
+* [ ] Implement retry logic (Issues 14, 64)
+* [ ] Add user-friendly error messages
+
+*Day 3-4: Input Validation*
+
+* [ ] Implement comprehensive validation (Issue 10)
+* [ ] Add sanitization (Issue 50)
+* [ ] Implement rate limiting (Issue 11)
+
+*Day 5: Performance*
+
+* [ ] Add caching (Issue 69)
+* [ ] Optimize database queries
+* [ ] Implement pagination
+
+=== Phase 4: Testing & Documentation (Week 4)
+
+**Goal:** Ensure production readiness
+
+*Day 1-3: Testing*
+
+* [ ] Write unit tests
+* [ ] Write integration tests
+* [ ] Write E2E tests
+
+*Day 4-5: Documentation*
+
+* [ ] Write API documentation
+* [ ] Create deployment guide
+* [ ] Update README
+
+== Compliance with Project Requirements
+
+=== Security Requirements
+
+| Requirement | Status | Issues |
+|-------------|--------|--------|
+| Data encryption at rest | ❌ Not met | Issue 3 |
+| Data encryption in transit | ✅ Met | HTTPS enforced |
+| Authentication required | ❌ Not met | Issues 4, 5, 6, 8 |
+| Authorization checks | ⚠️ Partial | Issue 30 |
+| Input validation | ❌ Not met | Issue 10 |
+| Output encoding | ❌ Not met | Issue 15 |
+| SQL injection prevention | ⚠️ Partial | Issue 10 |
+| XSS prevention | ❌ Not met | Issues 15, 50 |
+| CSRF protection | ❌ Not met | Issue 44 |
+| Rate limiting | ❌ Not met | Issue 11 |
+| Audit logging | ❌ Not met | Issue 9 |
+
+=== Code Quality Requirements
+
+| Requirement | Status | Issues |
+|-------------|--------|--------|
+| Error handling | ❌ Not met | Issues 13, 20, 22 |
+| Logging | ❌ Not met | Issue 1 |
+| Testing | ❌ Not met | No tests found |
+| Documentation | ⚠️ Partial | Missing API docs |
+| Code review | ⚠️ Partial | This audit |
+| Static analysis | ❌ Not met | Not implemented |
+| Dependency scanning | ❌ Not met | Not implemented |
+
+=== Operational Requirements
+
+| Requirement | Status | Issues |
+|-------------|--------|--------|
+| Monitoring | ❌ Not met | Issue 65 |
+| Alerting | ❌ Not met | Not implemented |
+| Health checks | ❌ Not met | Issue 66 |
+| Backup/Recovery | ❌ Not met | Issue 2 |
+| Disaster recovery | ❌ Not met | Not implemented |
+| Performance monitoring | ❌ Not met | Issue 74 |
+| Capacity planning | ❌ Not met | Not implemented |
+
+=== Compliance Requirements
+
+| Requirement | Status | Issues |
+|-------------|--------|--------|
+| GDPR compliance | ❌ Not met | Issues 9, 52 |
+| Data retention | ❌ Not met | Issue 52 |
+| Right to deletion | ⚠️ Partial | Issue 52 |
+| Data portability | ❌ Not met | Not implemented |
+| Privacy by design | ❌ Not met | Multiple issues |
+| Security by design | ❌ Not met | Multiple issues |
+
+== Conclusion
+
+Context Bridge has a **solid architectural foundation** but suffers from **critical security vulnerabilities** and **missing production-ready features**. The codebase demonstrates good software engineering practices in some areas but falls short in security, logging, and error handling.
+
+### Key Takeaways
+
+1. **Security is biggest concern** - Multiple critical vulnerabilities must be fixed immediately
+2. **Logging is non-existent** - Cannot debug or monitor production issues
+3. **Code quality is inconsistent** - Some areas well-written, others lacking
+4. **Testing is missing** - No confidence in changes without tests
+5. **Not production ready** - Requires 4 weeks of focused work
+
+### Recommendation
+
+**Do not deploy to production until:**
+
+* All critical security vulnerabilities are fixed
+* Logging is fully configured and operational
+* Comprehensive testing is implemented
+* Error handling is comprehensive
+* Monitoring and alerting are in place
+
+**Estimated Time to Production Ready:** 4 weeks  
+**Recommended Team Size:** 2-3 senior developers
+
+---
+
+**Document Version:** 1.0  
+**Audit Date:** 2026-02-08  
+**Next Review Date:** After Phase 1 completion

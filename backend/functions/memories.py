@@ -27,6 +27,8 @@ from middleware import (
     NotFoundError,
     AuthorizationError,
     ValidationError,
+    apply_cors_headers,
+    handle_cors_preflight,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,33 +41,43 @@ async def memories_handler(req: func.HttpRequest) -> func.HttpResponse:
     memory_id = req.route_params.get('id')
     
     try:
+        # Handle CORS preflight
+        if method == 'OPTIONS':
+            return handle_cors_preflight(req)
+            
         # Authenticate request
         user = require_auth(req)
         user_id = user['id']
         
+        response = None
+        
         if method == 'GET':
             if memory_id:
-                return await get_memory(user_id, memory_id)
-            return await list_memories(user_id)
+                response = await get_memory(user_id, memory_id)
+            else:
+                response = await list_memories(user_id)
             
         elif method == 'POST':
-            return await create_memory(user_id, req)
+            response = await create_memory(user_id, req)
             
         elif method == 'PUT':
-            return await update_memory(user_id, memory_id, req)
+            response = await update_memory(user_id, memory_id, req)
             
         elif method == 'DELETE':
-            return await delete_memory(user_id, memory_id)
+            response = await delete_memory(user_id, memory_id)
             
         else:
-            return func.HttpResponse(
+            response = func.HttpResponse(
                 json.dumps({"status": "error", "message": "Method not allowed"}),
                 mimetype="application/json",
                 status_code=405
             )
             
+        return apply_cors_headers(response, req)
+            
     except Exception as e:
-        return handle_exception(e)
+        response = handle_exception(e)
+        return apply_cors_headers(response, req)
 
 
 async def list_memories(user_id: str) -> func.HttpResponse:

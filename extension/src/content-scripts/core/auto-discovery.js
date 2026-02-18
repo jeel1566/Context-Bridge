@@ -163,7 +163,7 @@ class AutoDiscoveringParser {
         if (navRoles.includes(element.getAttribute('role'))) return true;
 
         const navClasses = ['nav', 'sidebar', 'menu', 'header', 'footer', 'toolbar'];
-        const className = element.className?.toLowerCase() || '';
+        const className = (typeof element.className === 'string' ? element.className : element.getAttribute('class'))?.toLowerCase() || '';
         if (navClasses.some(c => className.includes(c))) return true;
 
         const navTags = ['NAV', 'HEADER', 'FOOTER', 'ASIDE'];
@@ -242,7 +242,8 @@ class AutoDiscoveringParser {
 
         // Include class hash for non-specific elements
         if (parts.length === 0) {
-            const classes = parent.className?.split(' ').slice(0, 3).join('.') || '';
+            const className = (typeof parent.className === 'string' ? parent.className : parent.getAttribute('class')) || '';
+            const classes = className.split(' ').slice(0, 3).join('.');
             parts.push(`class=${classes}`);
         }
 
@@ -336,7 +337,8 @@ class AutoDiscoveringParser {
         }
 
         // Try class-based selector
-        const classes = parent.className?.split(' ').filter(c => c.length > 2 && !c.includes('_'));
+        const className = (typeof parent.className === 'string' ? parent.className : parent.getAttribute('class')) || '';
+        const classes = className.split(' ').filter(c => c.length > 2 && !c.includes('_'));
         if (classes?.length) {
             return `.${classes.slice(0, 2).join('.')}`;
         }
@@ -358,7 +360,7 @@ class AutoDiscoveringParser {
         }
 
         // Try specific class patterns
-        const className = element.className || '';
+        const className = (typeof element.className === 'string' ? element.className : element.getAttribute('class')) || '';
         if (className.includes('message')) {
             return '[class*="message"]';
         }
@@ -411,7 +413,7 @@ class AutoDiscoveringParser {
         if (roleAttr) return roleAttr;
 
         // Check class patterns
-        const className = element.className?.toLowerCase() || '';
+        const className = (typeof element.className === 'string' ? element.className : element.getAttribute('class'))?.toLowerCase() || '';
         if (className.includes('user') || className.includes('human')) return 'user';
         if (className.includes('assistant') || className.includes('bot') || className.includes('ai')) return 'assistant';
 
