@@ -22,6 +22,55 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 # ============================================
+# Diagnostic (TEMPORARY - remove after debugging)
+# ============================================
+@app.route(route="debug/imports", methods=["GET"])
+def debug_imports(req: func.HttpRequest) -> func.HttpResponse:
+    """Diagnostic endpoint to check which imports work/fail on Azure."""
+    import traceback
+    results = {}
+    
+    # Test each import that the 503 endpoints need
+    test_imports = [
+        ("azure.functions", "import azure.functions"),
+        ("azure.cosmos", "from azure.cosmos import CosmosClient"),
+        ("jwt (PyJWT)", "import jwt"),
+        ("pycryptodome", "from Crypto.Cipher import AES"),
+        ("google.auth", "from google.auth.transport import requests"),
+        ("google.oauth2", "from google.oauth2 import id_token"),
+        ("services", "from services import get_cosmos_service, get_encryption_service"),
+        ("services.jwt_service", "from services.jwt_service import get_jwt_service"),
+        ("middleware", "from middleware import require_auth, handle_exception"),
+        ("middleware.supabase_auth", "from middleware.supabase_auth import validate_supabase_jwt"),
+        ("middleware.cors", "from middleware.cors import apply_cors_headers"),
+        ("middleware.errors", "from middleware.errors import ValidationError"),
+        ("functions.memories", "from functions.memories import memories_handler"),
+        ("functions.auth", "from functions.auth import auth_handler"),
+        ("functions.share", "from functions.share import share_handler"),
+        ("functions.sync", "from functions.sync import sync_handler"),
+        ("functions.sanitize", "from functions.sanitize import sanitize_handler"),
+        ("agents", "from agents import validate_input, validate_output, process_context"),
+    ]
+    
+    for name, import_stmt in test_imports:
+        try:
+            exec(import_stmt)
+            results[name] = {"status": "ok"}
+        except Exception as e:
+            results[name] = {
+                "status": "FAILED",
+                "error": str(e),
+                "type": type(e).__name__,
+                "traceback": traceback.format_exc()[-500:]
+            }
+    
+    return func.HttpResponse(
+        json.dumps({"diagnostic": results}, indent=2),
+        mimetype="application/json",
+        status_code=200
+    )
+
+# ============================================
 # Sandbox Processing
 # ============================================
 @app.route(route="sanitize", methods=["POST"])
