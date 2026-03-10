@@ -15,7 +15,16 @@ ALLOWED_ORIGINS = [
 ]
 
 def get_cors_headers(origin: str) -> dict:
-    """Get CORS headers for a specific origin."""
+    """
+    Build a dictionary of CORS response headers appropriate for the given request origin.
+    
+    Parameters:
+        origin (str): The request's Origin header value; if empty or falsy, headers will allow any origin.
+    
+    Returns:
+        dict: Mapping of CORS header names to values, including `Access-Control-Allow-Origin`,
+        allowed methods, allowed headers, max age, and credentials allowance.
+    """
     
     # Allow all origins for now to simplify debugging context-bridge issues
     # In production, this should be stricter
@@ -28,7 +37,18 @@ def get_cors_headers(origin: str) -> dict:
     }
 
 def apply_cors_headers(response: func.HttpResponse, req: func.HttpRequest) -> func.HttpResponse:
-    """Apply CORS headers to an existing response."""
+    """
+    Attach CORS headers to the given HttpResponse based on the request's Origin header.
+    
+    Reads the "Origin" header from `req` and uses it to build standard CORS response headers, then sets those headers on `response`.
+    
+    Parameters:
+        response (func.HttpResponse): The response to modify with CORS headers.
+        req (func.HttpRequest): The incoming request; its "Origin" header determines the value of Access-Control-Allow-Origin.
+    
+    Returns:
+        func.HttpResponse: The same `response` instance with CORS headers applied.
+    """
     origin = req.headers.get("Origin")
     
     headers = get_cors_headers(origin)
@@ -39,7 +59,15 @@ def apply_cors_headers(response: func.HttpResponse, req: func.HttpRequest) -> fu
     return response
 
 def handle_cors_preflight(req: func.HttpRequest) -> func.HttpResponse:
-    """Handle CORS preflight (OPTIONS) request."""
+    """
+    Responds to CORS preflight (OPTIONS) requests with the appropriate CORS headers.
+    
+    Parameters:
+        req (func.HttpRequest): Incoming Azure Functions HTTP request; the request's `Origin` header is read to build response CORS headers.
+    
+    Returns:
+        func.HttpResponse: An HTTP response with status code 204 (No Content) and CORS headers derived from the request's `Origin` (or `"*"` if the origin is missing).
+    """
     origin = req.headers.get("Origin")
     
     return func.HttpResponse(

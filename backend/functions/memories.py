@@ -35,7 +35,17 @@ logger = logging.getLogger(__name__)
 
 
 async def memories_handler(req: func.HttpRequest) -> func.HttpResponse:
-    """Handle all memory-related requests."""
+    """
+    Dispatches HTTP requests for memory CRUD operations and returns the corresponding HTTP response.
+    
+    Handles CORS preflight (OPTIONS), requires authentication, and routes authenticated requests to list, get, create, update, or delete memory handlers based on the HTTP method and optional memory id route parameter. All successful and error responses are returned with CORS headers applied; exceptions are converted to HTTP error responses by centralized exception handling.
+    
+    Parameters:
+        req (func.HttpRequest): The incoming HTTP request.
+    
+    Returns:
+        func.HttpResponse: An HTTP response representing the operation result (success or error) with CORS headers applied.
+    """
     
     method = req.method
     memory_id = req.route_params.get('id')
@@ -81,7 +91,22 @@ async def memories_handler(req: func.HttpRequest) -> func.HttpResponse:
 
 
 async def list_memories(user_id: str) -> func.HttpResponse:
-    """GET /api/memories - List all memories for user."""
+    """
+    List all memories belonging to the specified user.
+    
+    Parameters:
+        user_id (str): ID of the authenticated user whose memories should be listed.
+    
+    Returns:
+        func.HttpResponse: HTTP 200 response with a JSON body containing:
+            - "status": "success"
+            - "data": list of memory objects (each will include `content`; `encryptedContent` is removed)
+            - "count": number of memories returned
+    
+    Notes:
+        - If an encryption service is configured, encrypted memories are decrypted for the response.
+        - If decryption of an individual memory fails, its `content` is set to "[Decryption failed]" and processing continues.
+    """
     
     cosmos = get_cosmos_service()
     encryption = get_encryption_service()
